@@ -169,19 +169,21 @@ Example: exit_strategies/fixed_tp_sl.py
 
 Run the workflow using main.py. The system accepts command-line arguments to control the scope of the backtest.
 Command Line Arguments:
-Argument	Description	Default
---symbols	List of ticker symbols to process.	QQQ
---strategies	Specific entry strategy files to run (or 'all').	all
---exit_strategies	Specific exit strategy files to run (or 'all').	all
---timeframes	Timeframes to test.	1 hour, 4 hours, 1 day
---days	Total lookback period in days (IS + OOS).	1825
---is_years	Number of years allocated to In-Sample training.	3
---trials	Number of Optuna trials per combination.	100
---objective	Metric to optimize (Sharpe Ratio, Calmar Ratio, Total Return).	Calmar Ratio
+
+    Argument	Description	Default
+    
+    --symbols	List of ticker symbols to process.
+    --strategies	Specific entry strategy files to run (or 'all').
+    --exit_strategies	Specific exit strategy files to run (or 'all').
+    --timeframes	Timeframes to test.	1 hour, 4 hours, 1 day
+    --days	Total lookback period in days (IS + OOS).
+    --is_years	Number of years allocated to In-Sample training.
+    --trials	Number of Optuna trials per combination.
+    --objective	Metric to optimize (Sharpe Ratio, Calmar Ratio, Total Return).
+
 Example Execution:
 
     python main.py --symbols BTCUSD ETHUSD --strategies momentum_dual_consistency --exit_strategies fixed_tp_sl --timeframes "1 hour" "4 hours" --trials 200 --objective "Sharpe Ratio"
-
 
 
 6. Output
@@ -191,3 +193,4 @@ HTML Reports: Visualization of backtests, robustness, and optimization landscape
 CSV Data: Raw data for trials and robustness analysis.
 
 Logs: Execution details and error tracking.
+
