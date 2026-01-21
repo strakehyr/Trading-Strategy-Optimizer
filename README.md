@@ -47,6 +47,6 @@ For detailed instructions on installation, data ingestion (API or CSV), and crea
 
 ### Quick Start (Pre-requisites)
 ```bash
-git clone https://github.com/yourusername/repo-name.git
+git clone https://github.com/strakehyr/Trading-Strategy-Optimizer.git
 pip install -r requirements.txt
 python main.py --symbols QQQ --strategies all
