@@ -1,0 +1,15 @@
+# Generated outputs
+results/
+logs/
+
+# Market data (large binary/CSV files)
+market_data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.ruff_cache/
+
+# Claude Code internals
+.claude/
