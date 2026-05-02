@@ -19,7 +19,7 @@ Closes the end-to-end loop of the framework:
          on the full prior history (so all indicator lookbacks are warm),
          then the segment equity curve is scaled and chained to the
          running capital from the previous segment
-  5. Generates a self-contained HTML report with:
+  5. Generates a self-contained HTML report (Auto Generated Strategy Routing Backtest.html):
        - routing table coloured by regime
        - per-symbol equity curves with regime background bands
        - metrics summary (total return, ann return, Sharpe, max DD, Calmar)
@@ -101,6 +101,28 @@ def _score(ann_ret: float, max_dd_pct: float, n: int) -> float:
     return float(ann_ret * (1.0 + 0.10 * years))
 
 
+def _robust_selection_score(is_metric: float, oos_metric: float) -> float:
+    if oos_metric is None or not np.isfinite(oos_metric) or oos_metric <= -99998.0:
+        return -99999.0
+    if is_metric is None or not np.isfinite(is_metric) or is_metric <= -99998.0:
+        return -99999.0
+    positive_degradation = max(float(is_metric) - float(oos_metric), 0.0)
+    return float(oos_metric) - 0.25 * positive_degradation
+
+
+def _select_robust_row(rob_df: pd.DataFrame) -> pd.Series:
+    ranked = rob_df.copy()
+    if 'selection_score' not in ranked.columns:
+        ranked['selection_score'] = [
+            _robust_selection_score(is_v, oos_v)
+            for is_v, oos_v in zip(ranked.get('is_metric', []), ranked.get('oos_metric', []))
+        ]
+    return ranked.sort_values(
+        by=['selection_score', 'oos_metric', 'is_metric'],
+        ascending=[False, False, False],
+    ).iloc[0]
+
+
 def smooth_regime(series: pd.Series, persistence: int) -> pd.Series:
     """
     Require `persistence` consecutive bars in a new regime before accepting
@@ -149,6 +171,7 @@ def build_routing_table(
     run_dir: str,
     min_n: int = 30,
     timeframe_filter: str = '1 day',
+    vix_df: Optional[pd.DataFrame] = None,
 ) -> Dict:
     """
     Scans JOINT_* folders, computes per-regime conditional OOS performance
@@ -194,7 +217,7 @@ def build_routing_table(
             try:
                 rob_df = pd.read_csv(rob_f)
                 if not rob_df.empty:
-                    best = rob_df.sort_values('degradation').iloc[0]
+                    best = _select_robust_row(rob_df)
                     raw = best.get('params', '{}')
                     params = ast.literal_eval(raw) if isinstance(raw, str) else {}
                     oos_calmar = float(best.get('oos_metric', 0))
@@ -227,7 +250,7 @@ def build_routing_table(
 
         is_end = is_cv.index.max()
         try:
-            df_reg = compute_regime_features(df_full, None, is_end)
+            df_reg = compute_regime_features(df_full, vix_df, is_end)
         except Exception as e:
             logger.warning(f"Regime features failed for {combo}: {e}")
             continue
@@ -455,6 +478,36 @@ def run_regime_switching_backtest(
         if seg.empty or seg['total_value'].iloc[0] == 0:
             continue
 
+        # Tag which combo was active so the report can colour signals per algo
+        seg['strategy_combo'] = combo_info.get('combo', combo_info.get('strategy', 'unknown'))
+
+        # If the routed slice begins with an already-open position, the visible
+        # entry happened before this regime segment. Flag that carry-in exposure
+        # so the report does not look like it started tracking without a trade.
+        seg['segment_carry_in'] = np.nan
+        seg['segment_carry_in_label'] = np.nan
+        if 'shares' in seg.columns and abs(seg['shares'].iloc[0]) > 1e-9:
+            entry_cols = [c for c in ('long_entry_marker', 'short_entry_marker') if c in seg.columns]
+            has_entry_on_first = any(pd.notna(seg[c].iloc[0]) for c in entry_cols)
+            if not has_entry_on_first:
+                seg['segment_carry_in'] = seg['segment_carry_in'].astype(object)
+                seg['segment_carry_in_label'] = seg['segment_carry_in_label'].astype(object)
+                direction = 'long' if float(seg['shares'].iloc[0]) > 0 else 'short'
+                seg.loc[seg.index[0], 'segment_carry_in'] = direction
+                seg.loc[seg.index[0], 'segment_carry_in_label'] = (
+                    'Already LONG at segment start'
+                    if direction == 'long'
+                    else 'Already SHORT at segment start'
+                )
+
+        # Detect regime-switch forced exit: if the last bar still carries an open
+        # position (shares != 0), that position is silently dropped when the next
+        # segment starts.  Mark the last bar so the plotter can flag it distinctly.
+        seg['regime_switch_exit'] = np.nan
+        if 'shares' in seg.columns and abs(seg['shares'].iloc[-1]) > 1e-9:
+            seg['regime_switch_exit'] = seg['regime_switch_exit'].astype(object)
+            seg.loc[seg.index[-1], 'regime_switch_exit'] = True
+
         # Chain: scale this segment to start at current running capital
         rel_return = seg['total_value'].iloc[-1] / seg['total_value'].iloc[0]
         seg['total_value'] = seg['total_value'] / seg['total_value'].iloc[0] * capital
@@ -462,6 +515,8 @@ def run_regime_switching_backtest(
             seg['benchmark_value'] = (
                 seg['benchmark_value'] / seg['benchmark_value'].iloc[0] * capital
             )
+        # Marker columns (long_entry_marker etc.) hold raw close prices — kept
+        # as-is; plotter uses them as boolean flags and plots arrows at total_value.
         capital *= rel_return
         parts.append(seg)
 
@@ -502,10 +557,19 @@ def analyze(
     min_n: int = 30,
     persistence_days: int = 3,
     timeframe_filter: str = '1 day',
+    vix_df: Optional[pd.DataFrame] = None,
 ) -> None:
     """Main entry point — called from main.py or the CLI."""
     logger.info("=== Regime Router: building routing table ===")
-    rt = build_routing_table(run_dir, min_n=min_n, timeframe_filter=timeframe_filter)
+    if vix_df is None:
+        try:
+            from data_fetcher import get_market_data
+            vix_df = get_market_data('VIX', '1 day', min_data_days=365, contract_type='IND')
+        except Exception as e:
+            logger.warning("VIX data not available for regime router: %s", e)
+            vix_df = None
+
+    rt = build_routing_table(run_dir, min_n=min_n, timeframe_filter=timeframe_filter, vix_df=vix_df)
 
     if not rt:
         logger.error("Routing table empty — aborting regime-switching analysis.")
@@ -548,7 +612,7 @@ def analyze(
         df_ref  = df_ref[~df_ref.index.duplicated(keep='first')]
         if 'close' in df_ref.columns:
             is_end  = ref_is.index.max()
-            df_reg  = compute_regime_features(df_ref, None, is_end)
+            df_reg  = compute_regime_features(df_ref, vix_df, is_end)
             _oos_reg = df_reg.loc[df_reg.index > is_end]
             raw      = _oos_reg['composite_regime']
             ref_regime_series = smooth_regime(raw, persistence_days)
@@ -623,10 +687,14 @@ def analyze(
         logger.warning("No symbol results produced — skipping report.")
         return
 
-    from plotter import create_regime_switching_report
-    report_path = os.path.join(run_dir, 'regime_switching_backtest.html')
-    create_regime_switching_report(results, rt, report_path)
-    logger.info("Regime-switching report saved to %s", report_path)
+    from plotter import create_auto_generated_strategy_routing_report
+    report_path = os.path.join(run_dir, 'Auto Generated Strategy Routing Backtest.html')
+    create_auto_generated_strategy_routing_report(
+        results, rt, report_path,
+        rsi_series=rsi_series_oos,
+        vix_series=vix_series_oos,
+    )
+    logger.info("Auto-generated strategy routing backtest report saved to %s", report_path)
 
 
 # ---------------------------------------------------------------------------

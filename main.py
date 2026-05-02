@@ -77,7 +77,7 @@ def _save_combo_reports(
     try:
         if not analysis_df.empty:
             analysis_df.to_csv(os.path.join(combo_plot_dir, "robustness_analysis.csv"))
-            create_robustness_scatter_plot(analysis_df, objective_metric, os.path.join(combo_plot_dir, "robustness_scatter_plot.html"))
+            create_robustness_scatter_plot(analysis_df, objective_metric, os.path.join(combo_plot_dir, "Robustness Scatter Plot.html"))
     except Exception as e:
         logging.error(f"Error creating robustness plots for {combination_label}: {e}")
 
@@ -87,7 +87,7 @@ def _save_combo_reports(
             oos_df, oos_metrics = run_backtest(df_out_of_sample, strategy_info['function'], robust_params, exit_strategy_info['function'], uses_native_exit=exit_strategy_info['uses_native_exit'])
 
             if is_metrics and oos_metrics:
-                create_is_oos_comparison_plot(is_metrics, oos_metrics, os.path.join(combo_plot_dir, "is_vs_oos_comparison.html"))
+                create_is_oos_comparison_plot(is_metrics, oos_metrics, os.path.join(combo_plot_dir, "IS vs OOS Comparison.html"))
                 entry = {
                     'combination': combination_label,
                     'is_metrics': is_metrics,
@@ -100,25 +100,25 @@ def _save_combo_reports(
                 top_performers_data.append(entry)
 
             if not is_df.empty:
-                create_strategy_plot(is_df, {**is_metrics, 'label': f"{combination_label} (In-Sample)"}, timeframe, os.path.join(combo_plot_dir, "backtest_IN_SAMPLE.html"))
+                create_strategy_plot(is_df, {**is_metrics, 'label': f"{combination_label} (In-Sample)"}, timeframe, os.path.join(combo_plot_dir, "Backtest In-Sample.html"))
                 is_df[['open', 'high', 'low', 'close', 'total_value', 'benchmark_value']].to_csv(os.path.join(combo_plot_dir, "equity_curve_IS.csv"))
             if not oos_df.empty:
-                create_strategy_plot(oos_df, {**oos_metrics, 'label': f"{combination_label} (Out-of-Sample)"}, timeframe, os.path.join(combo_plot_dir, "backtest_OUT_OF_SAMPLE.html"))
+                create_strategy_plot(oos_df, {**oos_metrics, 'label': f"{combination_label} (Out-of-Sample)"}, timeframe, os.path.join(combo_plot_dir, "Backtest Out-of-Sample.html"))
                 oos_df[['open', 'high', 'low', 'close', 'total_value', 'benchmark_value']].to_csv(os.path.join(combo_plot_dir, "equity_curve_OOS.csv"))
             if not is_df.empty or not oos_df.empty:
                 create_return_calendar_heatmap(
                     is_df if not is_df.empty else pd.DataFrame(),
                     oos_df if not oos_df.empty else pd.DataFrame(),
                     f"{combination_label} - Daily Returns Calendar",
-                    os.path.join(combo_plot_dir, "calendar_returns.html"),
+                    os.path.join(combo_plot_dir, "Calendar Returns.html"),
                 )
         except Exception as e:
             logging.error(f"Error running backtests for {combination_label}: {e}")
 
     if study and study.trials:
         try:
-            create_optimization_history_plot(study, objective_metric, os.path.join(combo_plot_dir, "optimization_history.html"))
-            create_parallel_coordinates_plot(study, os.path.join(combo_plot_dir, "parallel_coordinates.html"))
+            create_optimization_history_plot(study, objective_metric, os.path.join(combo_plot_dir, "Optimization History.html"))
+            create_parallel_coordinates_plot(study, os.path.join(combo_plot_dir, "Parallel Coordinates.html"))
         except Exception as e:
             logging.error(f"Error creating optimisation plots for {combination_label}: {e}")
 
@@ -152,16 +152,16 @@ def _combine_symbol_curves(curves_list: List[pd.DataFrame]) -> pd.DataFrame:
 
     Each curve is normalized to its starting value (→ relative returns),
     averaged across symbols, then scaled back to 100 000 initial capital.
-    The first non-empty curve's OHLCV columns are used as the price reference
-    so regime indicators (SMA200 etc.) have something to work with.
+    Benchmark OHLC columns are normalized per symbol and averaged as a
+    synthetic equal-weight benchmark index for market-window visuals.
     """
     non_empty = [df for df in curves_list if not df.empty and 'total_value' in df.columns]
     if not non_empty:
         return pd.DataFrame()
 
-    price_ref = None
     tv_series: Dict[int, pd.Series] = {}
     bv_series: Dict[int, pd.Series] = {}
+    ohlc_series: Dict[str, List[pd.Series]] = {c: [] for c in ['open', 'high', 'low', 'close']}
 
     for i, df in enumerate(non_empty):
         start_val = df['total_value'].iloc[0]
@@ -170,10 +170,11 @@ def _combine_symbol_curves(curves_list: List[pd.DataFrame]) -> pd.DataFrame:
         tv_series[i] = df['total_value'] / start_val
         if 'benchmark_value' in df.columns and df['benchmark_value'].iloc[0] != 0:
             bv_series[i] = df['benchmark_value'] / df['benchmark_value'].iloc[0]
-        if price_ref is None:
-            ohlcv_cols = [c for c in ['open', 'high', 'low', 'close'] if c in df.columns]
-            if ohlcv_cols:
-                price_ref = df[ohlcv_cols].copy()
+        if all(c in df.columns for c in ohlc_series):
+            base_price = df['close'].dropna().iloc[0] if not df['close'].dropna().empty else 0
+            if base_price:
+                for col in ohlc_series:
+                    ohlc_series[col].append(df[col] / base_price * 100.0)
 
     if not tv_series:
         return pd.DataFrame()
@@ -187,9 +188,13 @@ def _combine_symbol_curves(curves_list: List[pd.DataFrame]) -> pd.DataFrame:
         bv_mean = pd.concat(bv_series, axis=1).mean(axis=1)
         combined['benchmark_value'] = bv_mean * 100_000.0
 
-    if price_ref is not None:
-        for col in price_ref.columns:
-            combined[col] = price_ref[col].reindex(combined.index, method='ffill')
+    for col, series_list in ohlc_series.items():
+        if series_list:
+            combined[col] = pd.concat(series_list, axis=1).mean(axis=1).reindex(combined.index).ffill()
+
+    if all(c in combined.columns for c in ['open', 'high', 'low', 'close']):
+        combined['high'] = combined[['open', 'high', 'low', 'close']].max(axis=1)
+        combined['low'] = combined[['open', 'high', 'low', 'close']].min(axis=1)
 
     return combined
 
@@ -206,6 +211,7 @@ def run_workflow(
     aggregation: str = 'average',
     resume_dir: Optional[str] = None,
     mode: str = 'joint',
+    offline_data: bool = False,
 ):
     if resume_dir:
         results_dir = resume_dir
@@ -224,7 +230,9 @@ def run_workflow(
     if not available_exit_strategies:
         logging.error("No exit strategies found in 'exit_strategies' folder. Aborting."); return
 
-    if not initialize_data_service():
+    if offline_data:
+        logging.info("Offline data mode enabled. Using local cached market_data CSVs only.")
+    elif not initialize_data_service():
         logging.warning("Data Service initialization failed. Attempting OFFLINE mode.")
 
     all_trials_data = []
@@ -319,14 +327,14 @@ def run_workflow(
                         try:
                             if not analysis_df.empty:
                                 analysis_df.to_csv(os.path.join(joint_dir, "robustness_analysis.csv"))
-                                create_robustness_scatter_plot(analysis_df, objective_metric, os.path.join(joint_dir, "robustness_scatter_plot.html"))
+                                create_robustness_scatter_plot(analysis_df, objective_metric, os.path.join(joint_dir, "Robustness Scatter Plot.html"))
                         except Exception as e:
                             logging.error(f"Error saving robustness artefacts for {joint_label}: {e}")
 
                         if study and study.trials:
                             try:
-                                create_optimization_history_plot(study, objective_metric, os.path.join(joint_dir, "optimization_history.html"))
-                                create_parallel_coordinates_plot(study, os.path.join(joint_dir, "parallel_coordinates.html"))
+                                create_optimization_history_plot(study, objective_metric, os.path.join(joint_dir, "Optimization History.html"))
+                                create_parallel_coordinates_plot(study, os.path.join(joint_dir, "Parallel Coordinates.html"))
                             except Exception as e:
                                 logging.error(f"Error creating optimisation plots for {joint_label}: {e}")
 
@@ -356,7 +364,7 @@ def run_workflow(
                             try:
                                 create_joint_performance_summary(
                                     joint_symbol_entries,
-                                    os.path.join(joint_dir, "joint_performance_summary.html"),
+                                    os.path.join(joint_dir, "Joint Performance Summary.html"),
                                 )
                             except Exception as e:
                                 logging.error(f"Error creating joint performance summary: {e}")
@@ -459,7 +467,8 @@ def run_workflow(
             logging.warning(f"Could not fetch VIX data: {e}")
 
     finally:
-        shutdown_data_service()
+        if not offline_data:
+            shutdown_data_service()
 
     if top_performers_data:
         try:
@@ -470,16 +479,16 @@ def run_workflow(
     if effective_mode == 'joint' and top_performers_data:
         try:
             import regime_router
-            regime_router.analyze(results_dir, symbols)
+            regime_router.analyze(results_dir, symbols, vix_df=vix_df)
         except Exception as e:
             logging.error(f"Regime router analysis failed: {e}")
 
     if all_trials_data:
-        create_strategy_distribution_boxplot(pd.concat(all_trials_data, ignore_index=True), os.path.join(results_dir, "strategy_distribution_results.html"))
+        create_strategy_distribution_boxplot(pd.concat(all_trials_data, ignore_index=True), os.path.join(results_dir, "Strategy Distribution Results.html"))
 
     if top_performers_data:
-        create_top_performers_plot(top_performers_data, os.path.join(results_dir, "IS_OOS_strategies_performance.html"))
-        create_regime_performance_matrix(top_performers_data, os.path.join(results_dir, "regime_performance_matrix.html"))
+        create_top_performers_plot(top_performers_data, os.path.join(results_dir, "IS OOS Strategies Performance.html"))
+        create_regime_performance_matrix(top_performers_data, os.path.join(results_dir, "Regime Performance Matrix.html"))
 
     logging.info(f"Workflow complete! All results saved in {results_dir}")
 
@@ -498,9 +507,15 @@ def main():
     parser.add_argument("--mode", type=str, default="joint", choices=["joint", "per_symbol"],
                         help="'joint': one optimisation across all symbols, combined reporting (default for multi-symbol). "
                              "'per_symbol': optimise each symbol independently, separate results per symbol.")
+    parser.add_argument("--offline_data", action="store_true",
+                        help="Use existing local market_data CSV files only; do not connect to or update the data cache.")
 
     args, _ = parser.parse_known_args()
-    run_workflow(args.symbols, args.strategies, args.exit_strategies, args.timeframes, args.days, args.is_years, args.trials, args.objective, args.aggregation, args.resume_dir, args.mode)
+    run_workflow(
+        args.symbols, args.strategies, args.exit_strategies, args.timeframes,
+        args.days, args.is_years, args.trials, args.objective, args.aggregation,
+        args.resume_dir, args.mode, args.offline_data
+    )
 
 if __name__ == "__main__":
     main()

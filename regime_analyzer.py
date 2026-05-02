@@ -408,7 +408,7 @@ def analyze(
         return
 
     from plotter import create_regime_strategy_passport
-    save_path = os.path.join(results_dir, "market_regime_attribution.html")
+    save_path = os.path.join(results_dir, "Market Regime Attribution.html")
     create_regime_strategy_passport(passport_entries, save_path)
     logger.info(f"Market Regime Attribution saved to: {save_path}")
 
@@ -483,12 +483,18 @@ def analyze_from_disk(run_dir: str, top_n: int = 15) -> None:
                         best = rob_df.sort_values('degradation').iloc[0]
                         is_metrics  = {'Calmar Ratio': float(best.get('is_metric',  0))}
                         oos_metrics = {'Calmar Ratio': float(best.get('oos_metric', 0))}
+                symbol_dirs = [
+                    name for name in sorted(os.listdir(combo_path))
+                    if os.path.isdir(os.path.join(combo_path, name))
+                    and os.path.exists(os.path.join(combo_path, name, "equity_curve_OOS.csv"))
+                ]
                 top_performers_data.append({
                     'combination': label,
                     'is_metrics':  is_metrics,
                     'oos_metrics': oos_metrics,
                     'is_curves':   is_cv,
                     'oos_curves':  oos_cv,
+                    'symbols':     symbol_dirs,
                 })
             except Exception as e:
                 logger.warning(f"Could not load combined curves for {combo_dir}: {e}")

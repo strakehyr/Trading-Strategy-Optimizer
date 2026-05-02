@@ -18,6 +18,19 @@ def _aggregate(values: List[float], mode: str) -> float:
     return float(np.mean(valid))  # default: 'average'
 
 
+def robust_selection_score(is_metric: float, oos_metric: float) -> float:
+    """
+    Rank candidates by out-of-sample quality first, then penalize only the
+    portion of IS performance that failed to carry forward.
+    """
+    if oos_metric is None or not np.isfinite(oos_metric) or oos_metric <= -99998.0:
+        return -99999.0
+    if is_metric is None or not np.isfinite(is_metric) or is_metric <= -99998.0:
+        return -99999.0
+    positive_degradation = max(float(is_metric) - float(oos_metric), 0.0)
+    return float(oos_metric) - 0.25 * positive_degradation
+
+
 def create_objective(
     symbol_datasets_is: List[pd.DataFrame],
     strategy_func: Callable,
@@ -157,12 +170,14 @@ def find_robust_parameters(
 
         oos_metric_value = _aggregate(oos_values, aggregation)
         degradation = is_metric_value - oos_metric_value
+        selection_score = robust_selection_score(is_metric_value, oos_metric_value)
         analysis_results.append({
             "rank": rank + 1,
             "params": params,
             "is_metric": is_metric_value,
             "oos_metric": oos_metric_value,
             "degradation": degradation,
+            "selection_score": selection_score,
         })
 
     if not analysis_results:
@@ -176,7 +191,11 @@ def find_robust_parameters(
         logger.warning("All candidates had severe OOS degradation. Picking best available.")
         sane_candidates = analysis_df.copy()
 
-    sane_candidates.sort_values(by='degradation', ascending=True, inplace=True)
+    sane_candidates.sort_values(
+        by=['selection_score', 'oos_metric', 'is_metric'],
+        ascending=[False, False, False],
+        inplace=True,
+    )
     most_robust = sane_candidates.iloc[0]
 
     logger.info("--- Robustness Analysis Complete ---")
@@ -184,6 +203,7 @@ def find_robust_parameters(
     logger.info(f" - In-Sample  {objective_metric}: {most_robust['is_metric']:.4f}")
     logger.info(f" - Out-of-Sample {objective_metric}: {most_robust['oos_metric']:.4f}")
     logger.info(f" - Degradation: {most_robust['degradation']:.4f}")
+    logger.info(f" - Robust Selection Score: {most_robust['selection_score']:.4f}")
     logger.info(f" - Params: {most_robust['params']}")
 
     return most_robust['params'], study, analysis_df

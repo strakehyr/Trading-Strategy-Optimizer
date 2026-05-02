@@ -6,6 +6,302 @@ from typing import Dict, Any, Optional, List
 import optuna
 import pytz
 import plotly.express as px
+from plotly.offline import get_plotlyjs
+
+_EDITORIAL_THEME = {
+    'shell_bg': '#efe7da',
+    'shell_tint': '#f6f1e8',
+    'surface': '#fffdf8',
+    'surface_alt': '#f7f1e8',
+    'surface_dark': '#12233a',
+    'surface_dark_alt': '#182c46',
+    'ink': '#162033',
+    'muted': '#5f6c7b',
+    'subtle': '#8b97a5',
+    'border': '#d8cfbf',
+    'border_strong': '#c5baa6',
+    'accent': '#163a5c',
+    'accent_soft': '#315a7c',
+    'accent_gold': '#9b6a2d',
+    'positive': '#0f6a56',
+    'negative': '#8e3e2f',
+    'warning': '#b1762d',
+    'plot_bg': '#f8f2e9',
+    'plot_grid': '#ddd2c0',
+    'plot_line': '#c8bba7',
+}
+
+_PLOTLY_CONFIG = {
+    'responsive': True,
+    'displaylogo': False,
+}
+
+
+def _apply_editorial_theme(
+    fig: go.Figure,
+    title: str,
+    subtitle: str = '',
+    height: Optional[int] = None,
+    legend_orientation: str = 'h',
+    margin: Optional[Dict[str, int]] = None,
+    showlegend: Optional[bool] = None,
+    legend_y: Optional[float] = None,
+) -> go.Figure:
+    tokens = _EDITORIAL_THEME
+    if margin is None:
+        margin = dict(l=64, r=36, t=145, b=72)
+
+    title_text = f'<b>{title}</b>'
+    if subtitle:
+        title_text += (
+            f'<br><span style="font-size:11px;color:{tokens["muted"]};'
+            'font-family:Segoe UI, system-ui, sans-serif">'
+            f'{subtitle[:125]}{"..." if len(subtitle) > 125 else ""}</span>'
+        )
+
+    legend_defaults = dict(
+        orientation=legend_orientation,
+        x=1 if legend_orientation == 'h' else 1,
+        xanchor='right',
+        y=1.025 if legend_orientation == 'h' else 1,
+        yanchor='bottom' if legend_orientation == 'h' else 'top',
+        bgcolor='rgba(255,253,248,0.92)',
+        bordercolor=tokens['border'],
+        borderwidth=1,
+        font=dict(color=tokens['muted'], size=11),
+        title=dict(font=dict(color=tokens['subtle'], size=10)),
+    )
+    if legend_y is not None:
+        legend_defaults['y'] = legend_y
+
+    fig.update_layout(
+        title=dict(
+            text=title_text,
+            x=0.02,
+            xanchor='left',
+            y=0.98,
+            yanchor='top',
+            font=dict(
+                family='Georgia, Times New Roman, serif',
+                size=22,
+                color=tokens['ink'],
+            ),
+        ),
+        paper_bgcolor=tokens['surface'],
+        plot_bgcolor=tokens['plot_bg'],
+        font=dict(family='Segoe UI, system-ui, sans-serif', color=tokens['ink'], size=12),
+        margin=margin,
+        hoverlabel=dict(
+            bgcolor=tokens['surface'],
+            bordercolor=tokens['border_strong'],
+            font=dict(color=tokens['ink'], family='Segoe UI, system-ui, sans-serif', size=12),
+        ),
+        legend=legend_defaults,
+        hovermode='x unified',
+    )
+    if height is not None:
+        fig.update_layout(height=height)
+    if showlegend is not None:
+        fig.update_layout(showlegend=showlegend)
+
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor=tokens['plot_grid'],
+        linecolor=tokens['plot_line'],
+        zerolinecolor=tokens['plot_grid'],
+        tickfont=dict(color=tokens['muted'], size=11),
+        title_font=dict(color=tokens['subtle'], size=11),
+    )
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor=tokens['plot_grid'],
+        linecolor=tokens['plot_line'],
+        zerolinecolor=tokens['plot_grid'],
+        tickfont=dict(color=tokens['muted'], size=11),
+        title_font=dict(color=tokens['subtle'], size=11),
+    )
+
+    if getattr(fig.layout, 'annotations', None):
+        for ann in fig.layout.annotations:
+            ann.update(
+                font=dict(
+                    family='Segoe UI, system-ui, sans-serif',
+                    size=11,
+                    color=tokens['accent'],
+                )
+            )
+    return fig
+
+
+def _build_single_figure_html(
+    figure_html: str,
+    page_title: str,
+    eyebrow: str,
+    subtitle: str,
+    note: str = '',
+) -> str:
+    t = _EDITORIAL_THEME
+    note_html = (
+        f'<div class="figure-note"><span>Reading Note</span><p>{note}</p></div>'
+        if note else ''
+    )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{page_title}</title>
+  <script>{get_plotlyjs()}</script>
+  <style>
+    :root {{
+      --shell-bg: {t['shell_bg']};
+      --shell-tint: {t['shell_tint']};
+      --surface: {t['surface']};
+      --surface-alt: {t['surface_alt']};
+      --ink: {t['ink']};
+      --muted: {t['muted']};
+      --subtle: {t['subtle']};
+      --border: {t['border']};
+      --border-strong: {t['border_strong']};
+      --accent: {t['accent']};
+      --accent-soft: {t['accent_soft']};
+      --accent-gold: {t['accent_gold']};
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      background:
+        radial-gradient(circle at top left, rgba(255,255,255,0.72), transparent 28%),
+        linear-gradient(180deg, #f3ecdf 0%, var(--shell-bg) 48%, #ebe2d3 100%);
+      color: var(--ink);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }}
+    .page {{
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 36px 28px 42px;
+    }}
+    .mast {{
+      display: grid;
+      gap: 14px;
+      margin-bottom: 26px;
+    }}
+    .eyebrow {{
+      margin: 0;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent-soft);
+    }}
+    .mast h1 {{
+      margin: 0;
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: clamp(28px, 4vw, 44px);
+      line-height: 1.02;
+      letter-spacing: -0.03em;
+      max-width: 12ch;
+    }}
+    .mast p {{
+      margin: 0;
+      max-width: 78ch;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.75;
+    }}
+    .figure-shell {{
+      background: linear-gradient(180deg, rgba(255,253,248,0.96), rgba(247,241,232,0.98));
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      box-shadow: 0 24px 60px rgba(22, 32, 51, 0.08);
+      overflow: hidden;
+    }}
+    .figure-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      align-items: flex-start;
+      padding: 18px 22px 0;
+    }}
+    .figure-head strong {{
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--accent-soft);
+    }}
+    .figure-note {{
+      min-width: min(340px, 100%);
+      background: rgba(255,255,255,0.65);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px 16px;
+    }}
+    .figure-note span {{
+      display: block;
+      margin-bottom: 6px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--subtle);
+      font-weight: 700;
+    }}
+    .figure-note p {{
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }}
+    .figure-card {{
+      padding: 10px 10px 16px;
+    }}
+    .plotly-graph-div {{
+      border-radius: 18px;
+      overflow: hidden;
+    }}
+    @media (max-width: 900px) {{
+      .page {{ padding: 24px 16px 30px; }}
+      .figure-head {{ flex-direction: column; }}
+      .mast h1 {{ max-width: none; }}
+      .figure-note {{ min-width: 0; width: 100%; }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="mast">
+      <p class="eyebrow">{eyebrow}</p>
+      <h1>{page_title}</h1>
+      <p>{subtitle}</p>
+    </header>
+    <section class="figure-shell">
+      <div class="figure-head">
+        <strong>Interactive Exhibit</strong>
+        {note_html}
+      </div>
+      <div class="figure-card">{figure_html}</div>
+    </section>
+  </main>
+</body>
+</html>"""
+
+
+def _write_single_figure_report(
+    fig: go.Figure,
+    save_path: Optional[str],
+    page_title: str,
+    eyebrow: str,
+    subtitle: str,
+    note: str = '',
+) -> None:
+    if not save_path:
+        return
+    figure_html = fig.to_html(
+        full_html=False,
+        include_plotlyjs=False,
+        config=_PLOTLY_CONFIG,
+    )
+    with open(save_path, 'w', encoding='utf-8') as fh:
+        fh.write(_build_single_figure_html(figure_html, page_title, eyebrow, subtitle, note))
 
 def _get_strategy_color_map(combinations: list) -> Dict[str, str]:
     """Helper to generate consistent colors based on the strategy name."""
@@ -26,6 +322,7 @@ def _extract_strat_name(combo: str) -> str:
 
 def create_strategy_plot(df: pd.DataFrame, metrics: Dict, timeframe: str, save_path: Optional[str] = None):
     if df.empty: return
+    t = _EDITORIAL_THEME
     df_plot = df.copy()
     try: df_plot.index = df_plot.index.tz_convert('America/New_York')
     except (TypeError, AttributeError): pass
@@ -65,7 +362,16 @@ def create_strategy_plot(df: pd.DataFrame, metrics: Dict, timeframe: str, save_p
     
     x_axis = df_plot.index
     
-    fig.add_trace(go.Candlestick(x=x_axis, open=df_plot['open'], high=df_plot['high'], low=df_plot['low'], close=df_plot['close'], name='OHLC'), row=1, col=1)
+    fig.add_trace(go.Candlestick(
+        x=x_axis,
+        open=df_plot['open'],
+        high=df_plot['high'],
+        low=df_plot['low'],
+        close=df_plot['close'],
+        name='OHLC',
+        increasing=dict(line=dict(color=t['positive']), fillcolor='rgba(15, 106, 86, 0.6)'),
+        decreasing=dict(line=dict(color=t['negative']), fillcolor='rgba(142, 62, 47, 0.6)'),
+    ), row=1, col=1)
     
     for spec in active_indicators.values():
         if spec['subplot'] == 'price':
@@ -97,26 +403,26 @@ def create_strategy_plot(df: pd.DataFrame, metrics: Dict, timeframe: str, save_p
                 
                 fig.add_shape(type="rect", xref="x", yref="y", layer="below",
                             x0=entry_idx, y0=entry_price, x1=end_idx, y1=tp_price,
-                            fillcolor="rgba(214, 39, 40, 0.1)", line_width=0, row=1, col=1)
+                            fillcolor="rgba(142, 62, 47, 0.12)", line_width=0, row=1, col=1)
                 
                 fig.add_shape(type="rect", xref="x", yref="y", layer="below",
                             x0=entry_idx, y0=entry_price, x1=end_idx, y1=sl_price,
-                            fillcolor="rgba(44, 160, 44, 0.1)", line_width=0, row=1, col=1)
+                            fillcolor="rgba(15, 106, 86, 0.10)", line_width=0, row=1, col=1)
 
     if 'tp_level' in df_plot.columns and not df_plot['tp_level'].dropna().empty:
-        fig.add_trace(go.Scatter(x=x_axis, y=df_plot['tp_level'], mode='lines', name='Take Profit', line=dict(color='lightgreen', dash='dash', width=1), connectgaps=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=x_axis, y=df_plot['tp_level'], mode='lines', name='Take Profit', line=dict(color=t['positive'], dash='dash', width=1.2), connectgaps=False), row=1, col=1)
     if 'sl_level' in df_plot.columns and not df_plot['sl_level'].dropna().empty:
-        fig.add_trace(go.Scatter(x=x_axis, y=df_plot['sl_level'], mode='lines', name='Stop Loss', line=dict(color='#FF5252', dash='dash', width=1), connectgaps=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=x_axis, y=df_plot['sl_level'], mode='lines', name='Stop Loss', line=dict(color=t['negative'], dash='dash', width=1.2), connectgaps=False), row=1, col=1)
     
     if 'exit_marker' in df_plot.columns:
         exits = df_plot[df_plot['exit_marker'].notna()]
-        fig.add_trace(go.Scatter(x=exits.index, y=exits['exit_marker'], mode='markers', name='Exit', marker=dict(symbol='x', color='orange', size=14, line=dict(width=2))), row=1, col=1)
+        fig.add_trace(go.Scatter(x=exits.index, y=exits['exit_marker'], mode='markers', name='Exit', marker=dict(symbol='x', color=t['accent_gold'], size=13, line=dict(width=2))), row=1, col=1)
     if 'long_entry_marker' in df_plot.columns:
         entries = df_plot[df_plot['long_entry_marker'].notna()]
-        fig.add_trace(go.Scatter(x=entries.index, y=entries['long_entry_marker'], mode='markers', name='Long Entry', marker=dict(symbol='triangle-up', color='green', size=12, line=dict(width=1, color='black'))), row=1, col=1)
+        fig.add_trace(go.Scatter(x=entries.index, y=entries['long_entry_marker'], mode='markers', name='Long Entry', marker=dict(symbol='triangle-up', color=t['positive'], size=12, line=dict(width=1, color=t['surface']))), row=1, col=1)
     if 'short_entry_marker' in df_plot.columns:
         entries = df_plot[df_plot['short_entry_marker'].notna()]
-        fig.add_trace(go.Scatter(x=entries.index, y=entries['short_entry_marker'], mode='markers', name='Short Entry', marker=dict(symbol='triangle-down', color='red', size=12, line=dict(width=1, color='black'))), row=1, col=1)
+        fig.add_trace(go.Scatter(x=entries.index, y=entries['short_entry_marker'], mode='markers', name='Short Entry', marker=dict(symbol='triangle-down', color=t['negative'], size=12, line=dict(width=1, color=t['surface']))), row=1, col=1)
     
     current_row = 2
     for name in new_subplots_needed:
@@ -138,18 +444,36 @@ def create_strategy_plot(df: pd.DataFrame, metrics: Dict, timeframe: str, save_p
                         fig.add_trace(go.Scatter(x=x_axis, y=df_plot[col], mode='lines', name=col.replace('_', ' ').title()), row=current_row, col=1)
         current_row += 1
     
-    fig.add_trace(go.Bar(x=x_axis, y=df_plot['volume'], name='Volume', marker_color='lightgrey'), row=total_rows - 1, col=1)
-    fig.add_trace(go.Scatter(x=x_axis, y=df_plot['total_value'], mode='lines', name='Strategy Value', line=dict(color='blue', width=2)), row=total_rows, col=1)
+    fig.add_trace(go.Bar(x=x_axis, y=df_plot['volume'], name='Volume', marker_color='#cabfae'), row=total_rows - 1, col=1)
+    fig.add_trace(go.Scatter(x=x_axis, y=df_plot['total_value'], mode='lines', name='Strategy Value', line=dict(color=t['accent'], width=2.4)), row=total_rows, col=1)
     if 'benchmark_value' in df_plot.columns and 'Benchmark' in metrics:
-        fig.add_trace(go.Scatter(x=x_axis, y=df_plot['benchmark_value'], mode='lines', name=metrics.get('Benchmark', 'Benchmark'), line=dict(dash='dot', color='grey')), row=total_rows, col=1)
+        fig.add_trace(go.Scatter(x=x_axis, y=df_plot['benchmark_value'], mode='lines', name=metrics.get('Benchmark', 'Benchmark'), line=dict(dash='dot', color='#7f8792', width=1.7)), row=total_rows, col=1)
     
     rangebreaks = [dict(bounds=["sat", "mon"])]
     if 'hour' in timeframe.lower() or 'min' in timeframe.lower(): rangebreaks.append(dict(pattern='hour', bounds=[16, 9.5]))
     fig.update_xaxes(rangebreaks=rangebreaks)
     
-    metrics_text = f"Return: {metrics.get('Total Return Pct', 0):.2f}% | Sharpe: {metrics.get('Sharpe Ratio', 0):.2f}"
-    fig.update_layout(title=f"Backtest: {metrics.get('label', 'Strategy')} ({metrics_text})", height=300 * total_rows, xaxis_rangeslider_visible=False)
-    if save_path: fig.write_html(save_path)
+    metrics_text = (
+        f"Return {metrics.get('Total Return Pct', 0):+.2f}%  |  "
+        f"Sharpe {metrics.get('Sharpe Ratio', 0):.2f}  |  "
+        f"Max DD {metrics.get('Max Drawdown Pct', 0):.2f}%"
+    )
+    fig.update_layout(xaxis_rangeslider_visible=False)
+    _apply_editorial_theme(
+        fig,
+        f"{metrics.get('label', 'Strategy')} Backtest",
+        f"{timeframe} execution path with price action, active indicators, trade markers, and portfolio curve. {metrics_text}",
+        height=320 * total_rows,
+        legend_y=1.03,
+    )
+    _write_single_figure_report(
+        fig,
+        save_path,
+        metrics.get('label', 'Strategy'),
+        'Permutation Drilldown',
+        'Price, signals, and the resulting equity curve are shown together so you can verify the strategy behavior, not just the end metrics.',
+        'Use this as the behavioral audit surface: confirm entries and exits line up with the indicator context, then compare the lower portfolio panel against the benchmark path.',
+    )
 
 
 def _find_longest_regime_period(df: pd.DataFrame) -> Dict[str, tuple]:
@@ -187,10 +511,26 @@ def _find_longest_regime_period(df: pd.DataFrame) -> Dict[str, tuple]:
 
 def create_regime_performance_matrix(summary_data: list[Dict], save_path: str):
     if not summary_data: return
+    t = _EDITORIAL_THEME
     ref_entry = summary_data[0]
     is_curve_ref = ref_entry.get('is_curves')
     oos_curve_ref = ref_entry.get('oos_curves')
     if is_curve_ref is None or is_curve_ref.empty: return
+
+    symbol_universe: List[str] = []
+    for entry in summary_data:
+        entry_symbols = entry.get('symbols')
+        if entry_symbols:
+            symbol_universe.extend(str(s) for s in entry_symbols)
+        elif entry.get('symbol'):
+            symbol_universe.append(str(entry['symbol']))
+    symbol_universe = sorted(dict.fromkeys(symbol_universe))
+    symbol_context = ', '.join(symbol_universe) if symbol_universe else 'the reference benchmark'
+    period_source = (
+        f'equal-weight combined benchmark across {symbol_context}'
+        if len(symbol_universe) > 1
+        else f'{symbol_context} benchmark'
+    )
     
     combo_str = ref_entry.get('combination', '').lower()
     is_intraday = 'hour' in combo_str or 'min' in combo_str
@@ -218,10 +558,21 @@ def create_regime_performance_matrix(summary_data: list[Dict], save_path: str):
             
     if not rows_config: return
 
+    def _has_live_ohlc(period_df: pd.DataFrame) -> bool:
+        required = ['open', 'high', 'low', 'close']
+        if not all(c in period_df.columns for c in required):
+            return False
+        live = period_df[required].dropna()
+        if len(live) < 3:
+            return False
+        close_unique_ratio = live['close'].nunique(dropna=True) / max(len(live), 1)
+        moving_bar_ratio = live.diff().abs().sum(axis=1).gt(1e-9).mean()
+        return close_unique_ratio > 0.25 and moving_bar_ratio > 0.25
+
     fig = make_subplots(
         rows=len(rows_config), cols=2,
         column_widths=[0.75, 0.25],
-        subplot_titles=[t for row in rows_config for t in [f"{row[0]} Market", "Strategy Returns"]],
+        subplot_titles=[t for row in rows_config for t in [f"{row[0]} Market Window", "Strategy Return Dispersion"]],
         vertical_spacing=0.06
     )
     
@@ -237,13 +588,26 @@ def create_regime_performance_matrix(summary_data: list[Dict], save_path: str):
         try: period_df.index = period_df.index.tz_convert('America/New_York')
         except (TypeError, AttributeError): pass
 
-        fig.add_trace(go.Candlestick(
-            x=period_df.index,
-            open=period_df['open'], high=period_df['high'],
-            low=period_df['low'], close=period_df['close'],
-            name="Benchmark",
-            showlegend=False
-        ), row=i, col=1)
+        if _has_live_ohlc(period_df):
+            fig.add_trace(go.Candlestick(
+                x=period_df.index,
+                open=period_df['open'], high=period_df['high'],
+                low=period_df['low'], close=period_df['close'],
+                name="Equal-Weight Benchmark OHLC",
+                showlegend=False,
+                increasing=dict(line=dict(color=t['positive']), fillcolor='rgba(15, 106, 86, 0.55)'),
+                decreasing=dict(line=dict(color=t['negative']), fillcolor='rgba(142, 62, 47, 0.55)'),
+            ), row=i, col=1)
+        elif 'benchmark_value' in period_df.columns:
+            fig.add_trace(go.Scatter(
+                x=period_df.index,
+                y=period_df['benchmark_value'],
+                mode='lines',
+                name="Equal-Weight Benchmark",
+                showlegend=False,
+                line=dict(color=t['accent'], width=2.1),
+                hovertemplate='%{x|%Y-%m-%d}<br>Benchmark: $%{y:,.0f}<extra></extra>',
+            ), row=i, col=1)
         
         axis_idx = (i - 1) * 2 + 1
         x_ref = f"x{axis_idx}" if axis_idx > 1 else "x"
@@ -257,6 +621,7 @@ def create_regime_performance_matrix(summary_data: list[Dict], save_path: str):
         )
         
         fig.update_xaxes(rangeslider_visible=False, rangebreaks=rangebreaks, row=i, col=1)
+        fig.update_yaxes(title_text="Benchmark", row=i, col=1)
         
         bench_start_val = period_df['benchmark_value'].iloc[0]
         bench_end_val = period_df['benchmark_value'].iloc[-1]
@@ -265,13 +630,14 @@ def create_regime_performance_matrix(summary_data: list[Dict], save_path: str):
         fig.add_shape(
             type="line", x0=-0.5, x1=len(summary_data)-0.5, 
             y0=bench_ret, y1=bench_ret,
-            line=dict(color="black", width=2, dash="dash"),
+            line=dict(color=t['accent'], width=2, dash="dash"),
             row=i, col=2
         )
         
         fig.add_trace(go.Scatter(
             x=[0], y=[bench_ret], mode='text', text=[f"Bench: {bench_ret:.1f}%"],
-            textposition="top right", showlegend=False
+            textposition="top right", showlegend=False,
+            textfont=dict(color=t['muted'], size=11),
         ), row=i, col=2)
 
         x_vals, y_vals, colors, hover_texts = [], [], [], []
@@ -296,19 +662,34 @@ def create_regime_performance_matrix(summary_data: list[Dict], save_path: str):
             
         fig.add_trace(go.Scatter(
             x=x_vals, y=y_vals, mode='markers',
-            marker=dict(size=10, color=colors),
+            marker=dict(size=10, color=colors, line=dict(color=t['surface'], width=0.8)),
             text=hover_texts, hoverinfo='text', showlegend=False
         ), row=i, col=2)
         
         fig.update_xaxes(showticklabels=False, row=i, col=2)
         fig.update_yaxes(title_text="Return %", matches=None, row=i, col=2)
 
-    fig.update_layout(title='Regime-Specific Performance Analysis (Longest Periods)', height=350 * len(rows_config), showlegend=False)
-    if save_path: fig.write_html(save_path)
+    _apply_editorial_theme(
+        fig,
+        'Regime-Specific Performance Matrix',
+        f'Period source: {period_source}.',
+        height=360 * len(rows_config),
+        showlegend=False,
+    )
+    fig.update_layout(hovermode='closest')
+    _write_single_figure_report(
+        fig,
+        save_path,
+        'Regime Performance Matrix',
+        'Run-Level Comparison',
+        f'This exhibit compares how each strategy permutation performed during the longest representative market phases. Period selection uses the {period_source}.',
+        'Read left-to-right: the market context panel shows the selected benchmark regime window, and the scatter panel shows which strategies delivered return inside that same window.',
+    )
 
 
 def create_top_performers_plot(summary_data: list[Dict], save_path: str):
     if not summary_data: return
+    t = _EDITORIAL_THEME
     
     metrics_to_plot = ['Total Return Pct', 'Sharpe Ratio', 'Calmar Ratio', 'Max Drawdown Pct']
     benchmark_key_map = {
@@ -340,8 +721,8 @@ def create_top_performers_plot(summary_data: list[Dict], save_path: str):
             if metric == 'Calmar Ratio': val = min(val, 20.0)
             oos_values.append(val)
 
-        fig.add_trace(go.Bar(name='In-Sample', x=combinations, y=is_values, marker_color=bar_colors, text=[f'{v:.2f}' for v in is_values], legendgroup='is', showlegend=(i==1)), row=i, col=1)
-        fig.add_trace(go.Bar(name='Out-of-Sample', x=combinations, y=oos_values, marker_color=bar_colors, marker_pattern_shape="/", text=[f'{v:.2f}' for v in oos_values], legendgroup='oos', showlegend=(i==1)), row=i, col=1)
+        fig.add_trace(go.Bar(name='In-Sample', x=combinations, y=is_values, marker_color=bar_colors, marker_line=dict(color=t['surface'], width=0.7), opacity=0.92, text=[f'{v:.2f}' for v in is_values], legendgroup='is', showlegend=(i==1)), row=i, col=1)
+        fig.add_trace(go.Bar(name='Out-of-Sample', x=combinations, y=oos_values, marker_color=bar_colors, marker_line=dict(color=t['surface'], width=0.7), marker_pattern_shape="/", opacity=0.76, text=[f'{v:.2f}' for v in oos_values], legendgroup='oos', showlegend=(i==1)), row=i, col=1)
 
         bench_key = benchmark_key_map.get(metric)
         if bench_key:
@@ -357,15 +738,29 @@ def create_top_performers_plot(summary_data: list[Dict], save_path: str):
                 if metric == 'Calmar Ratio': val = min(val, 20.0)
                 oos_bench.append(val)
 
-            fig.add_trace(go.Scatter(x=combinations, y=is_bench, mode='lines+markers', name='IS Benchmark', line=dict(color='black', width=2), marker=dict(size=6), legendgroup='benchmark_is', showlegend=(i==1)), row=i, col=1)
-            fig.add_trace(go.Scatter(x=combinations, y=oos_bench, mode='lines+markers', name='OOS Benchmark', line=dict(color='black', width=2, dash='dash'), marker=dict(size=6), legendgroup='benchmark_oos', showlegend=(i==1)), row=i, col=1)
+            fig.add_trace(go.Scatter(x=combinations, y=is_bench, mode='lines+markers', name='IS Benchmark', line=dict(color=t['accent'], width=2), marker=dict(size=6, color=t['accent']), legendgroup='benchmark_is', showlegend=(i==1)), row=i, col=1)
+            fig.add_trace(go.Scatter(x=combinations, y=oos_bench, mode='lines+markers', name='OOS Benchmark', line=dict(color=t['accent_gold'], width=2, dash='dash'), marker=dict(size=6, color=t['accent_gold']), legendgroup='benchmark_oos', showlegend=(i==1)), row=i, col=1)
 
-    fig.update_layout(height=300 * len(metrics_to_plot), title_text="Top Performers: In-Sample and Out-of-Sample vs Benchmark", barmode='group')
+    _apply_editorial_theme(
+        fig,
+        'Top Performers',
+        'Each metric is split between in-sample and out-of-sample so you can spot overfit winners versus permutations that still hold up against the benchmark after optimization.',
+        height=320 * len(metrics_to_plot),
+    )
+    fig.update_layout(barmode='group')
     fig.update_xaxes(tickangle=-45)
-    if save_path: fig.write_html(save_path)
+    _write_single_figure_report(
+        fig,
+        save_path,
+        'IS / OOS Strategy Performance',
+        'Run-Level Comparison',
+        'A compact leaderboard for the strongest permutations, keeping the benchmark visible in every panel so edge and robustness stay tied together.',
+        'The most important visual gap is not between bars of the same color family, but between in-sample conviction and out-of-sample retention.',
+    )
 
 def create_strategy_distribution_boxplot(all_studies_data: pd.DataFrame, save_path: str):
     if all_studies_data.empty: return
+    t = _EDITORIAL_THEME
 
     all_studies_data = all_studies_data.sort_values(by='combination')
     all_combos = all_studies_data['combination'].unique()
@@ -381,6 +776,9 @@ def create_strategy_distribution_boxplot(all_studies_data: pd.DataFrame, save_pa
         {'title': 'Max Consecutive Wins', 'key': 'user_attrs_Max Consecutive Wins', 'bench': 'user_attrs_Benchmark Max Consecutive Wins'},
         {'title': 'Max Consecutive Losses', 'key': 'user_attrs_Max Consecutive Losses', 'bench': 'user_attrs_Benchmark Max Consecutive Losses'}
     ]
+    metrics_config = [m for m in metrics_config if m['key'] in all_studies_data.columns]
+    if not metrics_config:
+        return
     
     fig = make_subplots(
         rows=len(metrics_config), cols=1,
@@ -403,33 +801,102 @@ def create_strategy_distribution_boxplot(all_studies_data: pd.DataFrame, save_pa
             
             fig.add_trace(go.Box(
                 y=family_data[metric_key], x=family_data['combination'], name=family,
-                boxpoints='outliers', marker_color=color_map[family], showlegend=(i == 1), legendgroup=family
+                boxpoints='outliers', marker_color=color_map[family], line=dict(color=color_map[family]), fillcolor=color_map[family], opacity=0.72, showlegend=(i == 1), legendgroup=family
             ), row=i, col=1)
         
         if bench_key and bench_key in all_studies_data.columns:
             bench_summary = all_studies_data.groupby('combination')[bench_key].first().reindex(unique_combos)
             fig.add_trace(go.Scatter(
-                x=bench_summary.index, y=bench_summary.values, mode='lines+markers', name='Benchmark',
-                line=dict(color='black', width=2), marker=dict(size=6, symbol='diamond', color='black'), showlegend=(i == 1)
+                x=bench_summary.index,
+                y=bench_summary.values,
+                mode='markers',
+                name='Benchmark',
+                marker=dict(
+                    size=7,
+                    symbol='diamond-open',
+                    color=t['accent'],
+                    line=dict(color=t['accent'], width=1.4),
+                ),
+                hovertemplate='Benchmark<br>%{x}<br>%{y:.2f}<extra></extra>',
+                showlegend=(i == 1),
             ), row=i, col=1)
         
         fig.update_xaxes(tickangle=-45, row=i, col=1)
         fig.update_yaxes(title_text="", row=i, col=1)
     
-    fig.update_layout(title_text="Strategy Distribution Boxplot (In-Sample)", showlegend=True, height=600 * len(metrics_config), legend=dict(orientation="h", yanchor="bottom", y=1.005, xanchor="right", x=1))
-    if save_path: fig.write_html(save_path)
+    _apply_editorial_theme(
+        fig,
+        'Strategy Distribution Boxplot',
+        'Optimization-trial dispersion is often more revealing than the single best run. These panels show whether a family is robust or just occasionally lucky.',
+        height=620 * len(metrics_config),
+    )
+    fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.005, xanchor="right", x=1))
+    _write_single_figure_report(
+        fig,
+        save_path,
+        'Strategy Distribution Results',
+        'Run-Level Comparison',
+        'This report shows the spread of optimization outcomes per strategy family rather than only the best-ranked trial.',
+        'Narrow, elevated boxes suggest a family that is consistently useful. Wide or chaotic distributions often mean the top score is fragile.',
+    )
 
 def create_optimization_history_plot(study: optuna.Study, objective_metric: str, save_path: str):
-    if not study.trials: return
-    trials_df = study.trials_dataframe()
-    if 'Sharpe' in objective_metric or 'Calmar' in objective_metric:
-        trials_df = trials_df[(trials_df['value'] >= -100) & (trials_df['value'] <= 100)]
-    fig = optuna.visualization.plot_optimization_history(study)
-    if len(trials_df) < len(study.trials):
-        fig.data[0].y = trials_df['value'].values
-        fig.data[0].x = trials_df['number'].values
+    if not study.trials:
+        return
+
+    valid_trials = []
+    for trial in study.trials:
+        state_name = getattr(trial.state, 'name', '')
+        value = trial.value
+        if state_name != 'COMPLETE' or value is None or not np.isfinite(value):
+            continue
+        if value <= -99998.0:
+            continue
+        if ('Sharpe' in objective_metric or 'Calmar' in objective_metric) and not (-100 <= value <= 100):
+            continue
+        valid_trials.append((trial.number, float(value)))
+
+    if not valid_trials:
+        return
+
+    trial_numbers = [n for n, _ in valid_trials]
+    values = [v for _, v in valid_trials]
+    best_values = pd.Series(values).cummax().tolist()
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=trial_numbers,
+        y=values,
+        mode='markers',
+        name='Completed Valid Trial',
+        marker=dict(size=7, color=_EDITORIAL_THEME['accent_soft'], opacity=0.78,
+                    line=dict(color=_EDITORIAL_THEME['surface'], width=0.6)),
+        hovertemplate='Trial %{x}<br>Objective: %{y:.4f}<extra></extra>',
+    ))
+    fig.add_trace(go.Scatter(
+        x=trial_numbers,
+        y=best_values,
+        mode='lines',
+        name='Best So Far',
+        line=dict(color=_EDITORIAL_THEME['warning'], width=2.2),
+        hovertemplate='Trial %{x}<br>Best: %{y:.4f}<extra></extra>',
+    ))
     fig.update_yaxes(title_text=objective_metric)
-    if save_path: fig.write_html(save_path)
+    _apply_editorial_theme(
+        fig,
+        'Optimization History',
+        f'Completed valid trials only for `{objective_metric}`; failed/error sentinel runs are excluded so the scale remains meaningful.',
+        height=720,
+    )
+    fig.update_layout(xaxis_title='Trial', legend=dict(y=1.02, x=1, xanchor='right', yanchor='bottom'))
+    _write_single_figure_report(
+        fig,
+        save_path,
+        'Optimization History',
+        'Permutation Drilldown',
+        'This chart shows how the search improved as trials accumulated and whether the optimizer converged cleanly or only found isolated late-stage wins.',
+        'A healthy shape usually climbs early, then flattens into a plateau. If the best score appears as a lone outlier at the far right, treat it with extra skepticism.',
+    )
 
 def create_parallel_coordinates_plot(study: optuna.Study, save_path: str):
     if not study.trials: return
@@ -453,8 +920,21 @@ def create_parallel_coordinates_plot(study: optuna.Study, save_path: str):
         line=dict(color=trials_df.get('value', 0), colorscale='Viridis', showscale=True, cmin=trials_df['value'].min(), cmax=trials_df['value'].max(), colorbar=dict(title="Objective<br>Metric<br>Value")),
         dimensions=dims
     ))
-    fig.update_layout(title="Parallel Coordinates of Optimization Hyperparameters and Metrics")
-    if save_path: fig.write_html(save_path)
+    fig.update_layout(
+        title='Parallel Coordinates of Optimization Hyperparameters and Metrics',
+        paper_bgcolor=_EDITORIAL_THEME['surface'],
+        plot_bgcolor=_EDITORIAL_THEME['surface'],
+        font=dict(color=_EDITORIAL_THEME['ink'], family='Segoe UI, system-ui, sans-serif'),
+        margin=dict(l=72, r=72, t=100, b=48),
+    )
+    _write_single_figure_report(
+        fig,
+        save_path,
+        'Parallel Coordinates',
+        'Permutation Drilldown',
+        'Use this view to see which parameter ranges repeatedly align with better objective values and where strong results conflict with each other.',
+        'Look for thick bands of darker lines clustering in the same parameter ranges. That usually matters more than a single exceptional thread.',
+    )
 
 def create_is_oos_comparison_plot(is_metrics: Dict, oos_metrics: Dict, save_path: str):
     metrics_to_compare = ['Total Return Pct', 'Sharpe Ratio', 'Calmar Ratio', 'Max Drawdown Pct', 'Total Trades']
@@ -462,33 +942,116 @@ def create_is_oos_comparison_plot(is_metrics: Dict, oos_metrics: Dict, save_path
     is_values = [is_metrics.get(m, 0) for m in metrics_to_compare]
     oos_values = [oos_metrics.get(m, 0) for m in metrics_to_compare]
     fig = go.Figure(data=[
-        go.Bar(name='In-Sample (Optimized)', x=labels, y=is_values, text=[f'{v:.2f}' for v in is_values], textposition='auto'),
-        go.Bar(name='Out-of-Sample (Validation)', x=labels, y=oos_values, text=[f'{v:.2f}' for v in oos_values], textposition='auto')
+        go.Bar(name='In-Sample (Optimized)', x=labels, y=is_values, text=[f'{v:.2f}' for v in is_values], textposition='auto', marker_color=_EDITORIAL_THEME['accent'], marker_line=dict(color=_EDITORIAL_THEME['surface'], width=0.8)),
+        go.Bar(name='Out-of-Sample (Validation)', x=labels, y=oos_values, text=[f'{v:.2f}' for v in oos_values], textposition='auto', marker_color=_EDITORIAL_THEME['accent_gold'], marker_line=dict(color=_EDITORIAL_THEME['surface'], width=0.8))
     ])
-    fig.update_layout(barmode='group', title='Performance Stability: In-Sample vs. Out-of-Sample', yaxis_title="Value", legend_title="Period")
-    if save_path: fig.write_html(save_path)
+    _apply_editorial_theme(
+        fig,
+        'Performance Stability',
+        'This is the fastest overfitting check in the stack: optimized in-sample metrics are shown directly beside their unseen validation results.',
+        height=680,
+    )
+    fig.update_layout(barmode='group', yaxis_title="Value", legend_title="Period")
+    _write_single_figure_report(
+        fig,
+        save_path,
+        'IS vs OOS Comparison',
+        'Permutation Drilldown',
+        'A direct stability check for the chosen parameter set, contrasting the optimized window against the unseen validation window.',
+        'The question is not whether OOS is lower than IS. It almost always is. The real question is whether the drop remains within a believable, tradable range.',
+    )
 
 def create_robustness_scatter_plot(analysis_df: pd.DataFrame, objective_metric: str, save_path: str):
     if analysis_df.empty: return
+    t = _EDITORIAL_THEME
+    analysis_df = analysis_df.copy()
+    if 'selection_score' not in analysis_df.columns:
+        positive_gap = (analysis_df['is_metric'] - analysis_df['oos_metric']).clip(lower=0)
+        analysis_df['selection_score'] = analysis_df['oos_metric'] - 0.25 * positive_gap
+    analysis_df = analysis_df.replace([np.inf, -np.inf], np.nan).dropna(
+        subset=['is_metric', 'oos_metric', 'degradation', 'selection_score']
+    )
+    analysis_df = analysis_df[
+        (analysis_df['is_metric'] > -99998.0) &
+        (analysis_df['oos_metric'] > -99998.0)
+    ]
+    if analysis_df.empty:
+        return
+
     fig = go.Figure()
     min_val, max_val = min(analysis_df['is_metric'].min(), analysis_df['oos_metric'].min()), max(analysis_df['is_metric'].max(), analysis_df['oos_metric'].max())
-    fig.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val], mode='lines', name='No Degradation Line', line=dict(color='grey', dash='dash')))
+    pad = max((max_val - min_val) * 0.08, 0.25)
+    fig.add_trace(go.Scatter(
+        x=[min_val - pad, max_val + pad],
+        y=[min_val - pad, max_val + pad],
+        mode='lines',
+        name='No Degradation',
+        line=dict(color=t['muted'], dash='dash'),
+    ))
     fig.add_trace(go.Scatter(
         x=analysis_df['is_metric'], y=analysis_df['oos_metric'], mode='markers',
-        marker=dict(size=12, color=analysis_df['degradation'], colorscale='RdYlGn_r', showscale=True, colorbar=dict(title="Degradation")),
-        text=[f"IS Rank: {r}<br>IS Metric: {im:.2f}<br>OOS Metric: {om:.2f}<br>Degradation: {d:.2f}" for r, im, om, d in zip(analysis_df['rank'], analysis_df['is_metric'], analysis_df['oos_metric'], analysis_df['degradation'])],
-        hoverinfo='text', name='Top IS Candidates'
+        marker=dict(
+            size=12,
+            color=analysis_df['degradation'],
+            colorscale=[[0.0, '#0f6a56'], [0.45, '#efe0bf'], [1.0, '#8e3e2f']],
+            reversescale=True,
+            cmid=0,
+            showscale=True,
+            colorbar=dict(title='IS-OOS<br>Gap', thickness=12, len=0.68, x=1.02, y=0.48),
+            line=dict(color=t['surface'], width=0.8),
+        ),
+        text=[
+            f"IS Rank: {r}<br>IS Metric: {im:.2f}<br>OOS Metric: {om:.2f}<br>"
+            f"IS-OOS Gap: {d:.2f}<br>Selection Score: {s:.2f}"
+            for r, im, om, d, s in zip(
+                analysis_df['rank'], analysis_df['is_metric'], analysis_df['oos_metric'],
+                analysis_df['degradation'], analysis_df['selection_score']
+            )
+        ],
+        hoverinfo='text',
+        name='Candidate Runs',
+        showlegend=False,
     ))
-    sane_candidates = analysis_df[analysis_df['oos_metric'] >= 0].copy()
+    sane_candidates = analysis_df[analysis_df['oos_metric'] > -20.0].copy()
     if not sane_candidates.empty:
-        most_robust = sane_candidates.sort_values(by='degradation').iloc[0]
-        fig.add_trace(go.Scatter(x=[most_robust['is_metric']], y=[most_robust['oos_metric']], mode='markers', marker=dict(size=18, color='cyan', symbol='star'), name='Selected Robust Params'))
-    fig.update_layout(
-        title='Robustness Analysis: IS vs. OOS Performance',
-        xaxis_title=f'In-Sample {objective_metric}', yaxis_title=f'Out-of-Sample {objective_metric}',
-        showlegend=True, legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+        most_robust = sane_candidates.sort_values(
+            by=['selection_score', 'oos_metric', 'is_metric'],
+            ascending=[False, False, False],
+        ).iloc[0]
+        fig.add_trace(go.Scatter(
+            x=[most_robust['is_metric']],
+            y=[most_robust['oos_metric']],
+            mode='markers',
+            marker=dict(size=20, color=t['accent_gold'], symbol='star',
+                        line=dict(color=t['surface'], width=1.2)),
+            name='Selected Robust Params',
+            hovertemplate=(
+                f"Selected<br>IS: {most_robust['is_metric']:.2f}<br>"
+                f"OOS: {most_robust['oos_metric']:.2f}<br>"
+                f"Score: {most_robust['selection_score']:.2f}<extra></extra>"
+            ),
+        ))
+    _apply_editorial_theme(
+        fig,
+        'Robustness Analysis',
+        f'In-sample versus out-of-sample `{objective_metric}`. Selection now prioritizes strong OOS performance, then penalizes uncaptured IS edge.',
+        height=720,
+        margin=dict(l=72, r=100, t=145, b=118),
+        legend_y=-0.16,
     )
-    if save_path: fig.write_html(save_path)
+    fig.update_layout(
+        xaxis_title=f'In-Sample {objective_metric}', yaxis_title=f'Out-of-Sample {objective_metric}',
+        showlegend=True,
+        legend=dict(orientation='h', yanchor='top', y=-0.14, xanchor='left', x=0.0),
+    )
+    _write_single_figure_report(
+        fig,
+        save_path,
+        'Robustness Scatter Plot',
+        'Permutation Drilldown',
+        'This figure checks whether strong in-sample candidates survive contact with out-of-sample reality.',
+        'Points nearest the diagonal with strong OOS values are usually more tradable than the extreme top-left outliers that collapse after optimization.',
+    )
 
 def create_return_calendar_heatmap(is_df: pd.DataFrame, oos_df: pd.DataFrame, title: str, save_path: Optional[str] = None):
     """
@@ -537,12 +1100,11 @@ def create_return_calendar_heatmap(is_df: pd.DataFrame, oos_df: pd.DataFrame, ti
         return
     
     colorscale = [
-        [0.0, '#d62728'],
-        [0.45, '#ff9999'],
-        [0.48, '#d3d3d3'],
-        [0.52, '#d3d3d3'],
-        [0.55, '#90ee90'],
-        [1.0, '#2ca02c']
+        [0.0, '#8e3e2f'],
+        [0.42, '#d8b39d'],
+        [0.50, '#efe7da'],
+        [0.58, '#b3d1c8'],
+        [1.0, '#0f6a56']
     ]
     
     all_months = []
@@ -651,14 +1213,21 @@ def create_return_calendar_heatmap(is_df: pd.DataFrame, oos_df: pd.DataFrame, ti
     # Adjust height to accommodate many rows
     height_per_row = min(250, max(150, 3000 // rows))
     
-    fig.update_layout(
-        title=title,
+    _apply_editorial_theme(
+        fig,
+        title,
+        'Daily return rhythm across the in-sample and out-of-sample windows. This is useful for spotting clustering, streakiness, and seasonal rough patches that summary metrics can hide.',
         height=height_per_row * rows,
-        showlegend=False
+        showlegend=False,
     )
-
-    if save_path:
-        fig.write_html(save_path)
+    _write_single_figure_report(
+        fig,
+        save_path,
+        'Calendar Returns',
+        'Permutation Drilldown',
+        'A month-by-month surface for daily returns across both study windows, designed to reveal streaks, gaps, and uneven return concentration.',
+        'Consistent medium greens matter more than a few isolated dark cells. The goal is repeatable rhythm, not just occasional spikes.',
+    )
 
 
 def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str):
@@ -686,13 +1255,13 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
     # -----------------------------------------------------------------------
     # Design tokens
     # -----------------------------------------------------------------------
-    BG       = '#0f172a'
-    CARD     = '#1e293b'
-    BORDER   = '#334155'
-    TEXT     = '#f1f5f9'
-    MUTED    = '#94a3b8'
-    ACCENT   = '#38bdf8'
-    YELLOW   = '#f59e0b'
+    BG       = '#fffdf8'
+    CARD     = '#f8f2e9'
+    BORDER   = '#d8cfbf'
+    TEXT     = '#172033'
+    MUTED    = '#667085'
+    ACCENT   = '#163a5c'
+    YELLOW   = '#9b6a2d'
 
     # -----------------------------------------------------------------------
     # Regime display labels and tooltips
@@ -972,20 +1541,37 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
         return z, hover_texts, y_labels
 
     def _cell_text(z_matrix):
-        """Format z-values (Ann Return %) as '+23.5%' / '—'."""
+        """Format z-values (Ann Return %) compactly without hiding extremes."""
+        def _fmt_cell(v):
+            if v is None or (isinstance(v, float) and np.isnan(v)):
+                return '—'
+            if abs(v) >= 1_000_000:
+                return f'{v / 1_000_000:+.1f}M%'
+            if abs(v) >= 10_000:
+                return f'{v / 1_000:+.0f}k%'
+            return f'{v:+.0f}%'
         return [[
-            f'{v:+.0f}%' if (v is not None and not (isinstance(v, float) and np.isnan(v))) else '—'
+            _fmt_cell(v)
             for v in row
         ] for row in z_matrix]
 
     def _dynamic_zrange(z_matrices):
-        """Symmetric colorbar range centred on 0, driven by actual data."""
-        flat = [v for mat in z_matrices for row in mat for v in row if v is not None]
+        """Robust symmetric range centered on 0, clipped so outliers don't destroy the scale."""
+        flat = [
+            float(v)
+            for mat in z_matrices
+            for row in mat
+            for v in row
+            if v is not None and not (isinstance(v, float) and np.isnan(v))
+        ]
         if not flat:
-            return -3.0, 3.0
-        mx = max(abs(min(flat)), abs(max(flat)))
-        mx = max(mx, 0.5)   # don't collapse to near-zero range
-        return round(-mx, 1), round(mx, 1)
+            return -10.0, 10.0
+        abs_vals = [abs(v) for v in flat]
+        robust = float(np.nanpercentile(abs_vals, 92))
+        mx = max(robust, 10.0)
+        mx = min(mx, 150.0)
+        mx = float(np.ceil(mx / 10.0) * 10.0)
+        return -mx, mx
 
     # -----------------------------------------------------------------------
     # Build coverage-aware x-axis labels
@@ -1017,12 +1603,11 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
 
     def _axis_label(bucket: str, cov_dict: Dict[str, Dict]) -> str:
         friendly = REGIME_FRIENDLY.get(bucket, '')
-        tech     = REGIME_DISPLAY.get(bucket, bucket.replace('_', ' ').title())
         cov_info = cov_dict.get(bucket, {})
         months   = cov_info.get('months', 0)
         pct      = cov_info.get('pct', 0)
         cov_line = f'~{months:.1f} mo · {pct:.0f}%' if (months > 0 or pct > 0) else ''
-        lines    = [friendly, tech]
+        lines    = [friendly or bucket.replace('_', ' ').title()]
         if cov_line:
             lines.append(cov_line)
         return '\n'.join(filter(None, lines))
@@ -1042,21 +1627,20 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
 
     specs  = [[{'type': 'heatmap'}], [{'type': 'heatmap'}], [{'type': 'heatmap'}]]
     titles = [
-        '① OOS Ann. Return % by Volatility × Trend Regime  ← primary signal: use this to decide WHEN to trade each strategy',
-        '② IS Ann. Return % by Volatility × Trend Regime  ← optimizer training window, shown for comparison only (not a live signal)',
-        '③ OOS Ann. Return % by RSI(14) Momentum Zone  ← does the strategy prefer bullish or bearish short-term momentum?',
+        'OOS Composite Regime - Primary Deployment Surface',
+        'IS Composite Regime - Training Reference',
+        'OOS RSI Momentum Zone',
     ]
     rsi_height = max(180, num_combos * 34 + 120)
     row_heights = [hm_height, hm_height, rsi_height]
 
     if has_vix_section:
         specs.append([{'type': 'heatmap'}])
-        titles.append('④ OOS Ann. Return % by VIX Fear Level  ← how each strategy performs under different implied-volatility environments')
+        titles.append('OOS VIX Fear Level')
         row_heights.append(vix_height)
 
-    table_section_num = '⑤' if has_vix_section else '④'
     specs.append([{'type': 'table'}])
-    titles.append(f'{table_section_num} Activation Guide  ← best deployment condition across all 3 regime dimensions (Vol×Trend / RSI / VIX). ★ = statistically validated · ~ = observed pattern')
+    titles.append('Activation Guide - Best Conditions Across Active Regime Dimensions')
     row_heights.append(table_height)
 
     n_sections = len(specs)
@@ -1096,11 +1680,21 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
         [1.00, '#14532d'],  # deep green (very positive)
     ]
 
+    LIGHT_DIVERGE = [
+        [0.00, '#b85c4d'],
+        [0.25, '#dd9f91'],
+        [0.48, '#f0e6d8'],
+        [0.50, '#f8f2e9'],
+        [0.52, '#e5eee6'],
+        [0.75, '#8fbea7'],
+        [1.00, '#24745e'],
+    ]
+
     HM_COMMON = dict(
-        colorscale=DARK_DIVERGE,
+        colorscale=LIGHT_DIVERGE,
         zmid=0,
         texttemplate='<b>%{text}</b>',
-        textfont=dict(size=11, color='white'),
+        textfont=dict(size=11, color=TEXT),
         hovertemplate='%{customdata}<extra></extra>',
         showscale=False,
     )
@@ -1120,10 +1714,14 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
         customdata=txt_oos,
         zmin=zmin_comp, zmax=zmax_comp,
         colorbar=dict(
-            title=dict(text='Ann Ret %', font=dict(color=TEXT, size=12)),
+            title=dict(text='Ann Ret %<br>(clipped)', font=dict(color=TEXT, size=12)),
             tickfont=dict(color=TEXT, size=11),
             ticksuffix='%',
-            x=1.01, thickness=14, len=0.3,
+            tickvals=[zmin_comp, zmin_comp / 2, 0, zmax_comp / 2, zmax_comp],
+            x=1.015, y=0.86, yanchor='middle',
+            thickness=12, lenmode='pixels', len=380,
+            outlinecolor=BORDER,
+            outlinewidth=1,
         ),
         showscale=True,
         **{k: v for k, v in HM_COMMON.items() if k != 'showscale'},
@@ -1345,31 +1943,31 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
         _col_matters.append(sig_summary)
 
     n_tbl = len(_col_strategy)
-    even_row = CARD
-    odd_row  = '#162032'
+    even_row = '#fffdf8'
+    odd_row  = '#f2eadf'
     row_base = [even_row if i % 2 == 0 else odd_row for i in range(n_tbl)]
-    best_regime_col = ['#14532d' if p else '#450a0a' for p in best_pos_flags]
-    dd_col = ['#1e293b'] * n_tbl
+    best_regime_col = ['#d8eee7' if p else '#f3d9d3' for p in best_pos_flags]
+    dd_col = ['#f8f2e9'] * n_tbl
     sig_col = [
-        '#14532d' if s is True else ('#450a0a' if s is False else '#1e293b')
+        '#d8eee7' if s is True else ('#f3d9d3' if s is False else '#f8f2e9')
         for s in any_sig_flags
     ]
     kw_comp_col = [
-        '#14532d' if (by_combo[c].get('OOS', {}).get('kruskal_wallis', {}).get('significant') is True)
-        else ('#450a0a' if (by_combo[c].get('OOS', {}).get('kruskal_wallis', {}).get('significant') is False)
-              else '#1e293b')
+        '#d8eee7' if (by_combo[c].get('OOS', {}).get('kruskal_wallis', {}).get('significant') is True)
+        else ('#f3d9d3' if (by_combo[c].get('OOS', {}).get('kruskal_wallis', {}).get('significant') is False)
+              else '#f8f2e9')
         for c in combos
     ]
     kw_rsi_col = [
-        '#14532d' if (by_combo[c].get('OOS', {}).get('kruskal_wallis_rsi', {}).get('significant') is True)
-        else ('#450a0a' if (by_combo[c].get('OOS', {}).get('kruskal_wallis_rsi', {}).get('significant') is False)
-              else '#1e293b')
+        '#d8eee7' if (by_combo[c].get('OOS', {}).get('kruskal_wallis_rsi', {}).get('significant') is True)
+        else ('#f3d9d3' if (by_combo[c].get('OOS', {}).get('kruskal_wallis_rsi', {}).get('significant') is False)
+              else '#f8f2e9')
         for c in combos
     ]
     kw_vix_col = [
-        '#14532d' if (by_combo[c].get('OOS', {}).get('kruskal_wallis_vix', {}).get('significant') is True)
-        else ('#450a0a' if (by_combo[c].get('OOS', {}).get('kruskal_wallis_vix', {}).get('significant') is False)
-              else '#1e293b')
+        '#d8eee7' if (by_combo[c].get('OOS', {}).get('kruskal_wallis_vix', {}).get('significant') is True)
+        else ('#f3d9d3' if (by_combo[c].get('OOS', {}).get('kruskal_wallis_vix', {}).get('significant') is False)
+              else '#f8f2e9')
         for c in combos
     ]
 
@@ -1432,7 +2030,7 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
         columnwidth=col_widths,
         header=dict(
             values=[f'<b>{c}</b>' for c in col_defs],
-            fill_color='#0c1a2e',
+            fill_color='#f1eadf',
             font=dict(color=ACCENT, size=12, family='monospace'),
             align='left',
             height=36,
@@ -1465,8 +2063,8 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
     # -----------------------------------------------------------------------
     for r in range(1, current_row):
         fig.update_xaxes(
-            tickangle=-45,
-            tickfont=dict(color=TEXT, size=10),
+            tickangle=0,
+            tickfont=dict(color=TEXT, size=9),
             gridcolor=BORDER,
             linecolor=BORDER,
             row=r, col=1,
@@ -1486,7 +2084,7 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
         title=dict(
             text=(
                 '<b>Market Regime Attribution</b><br>'
-                '<span style="font-size:12px;color:#94a3b8">'
+                '<span style="font-size:12px;color:#667085">'
                 'Each cell = Annualised Return % of that strategy while the market was in that regime condition. '
                 'Hover for Max Drawdown, Calmar, Sharpe and coverage (how many months of data). '
                 'Green = positive return · Red = negative · — = fewer than 10 bars recorded. '
@@ -1505,56 +2103,179 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
         margin=dict(l=60, r=80, t=120, b=120),
         font=dict(color=TEXT),
     )
+    fig.update_layout(
+        title=dict(
+            text='<b>Market Regime Attribution</b>',
+            x=0.02,
+            xanchor='left',
+            font=dict(color=TEXT, size=17),
+        )
+    )
 
     # -----------------------------------------------------------------------
     # Methodology + Glossary HTML (appended below the Plotly chart)
     # -----------------------------------------------------------------------
     plotly_div = fig.to_html(
         full_html=False,
-        include_plotlyjs='cdn',
-        config={'responsive': True, 'displayModeBar': True},
+        include_plotlyjs=False,
+        config={**_PLOTLY_CONFIG, 'displayModeBar': True},
     )
+
+    hero_cards_html = f"""
+    <article class="hero-card">
+      <span class="hero-label">Strategies Screened</span>
+      <strong>{len(combos)}</strong>
+      <p>Top-ranked permutations included in the attribution pass.</p>
+    </article>
+    <article class="hero-card">
+      <span class="hero-label">Primary Surface</span>
+      <strong>OOS Composite</strong>
+      <p>{len(all_buckets)} volatility-by-trend buckets define the main deployment lens.</p>
+    </article>
+    <article class="hero-card">
+      <span class="hero-label">Secondary Filters</span>
+      <strong>{'RSI + VIX' if has_vix_section else 'RSI only'}</strong>
+      <p>Momentum and fear overlays refine the composite signal rather than replace it.</p>
+    </article>
+    <article class="hero-card">
+      <span class="hero-label">Routing Logic</span>
+      <strong>{len(_selected_order)}</strong>
+      <p>Ranked strategy candidates feed the auto-routing decision tree below the glossary.</p>
+    </article>
+    """
 
     # -----------------------------------------------------------------------
     # Build unified SCORES routing section (inserted at end of report).
     # Shows the pre-computed score table across composite, RSI, and VIX analyses
     # plus the select_strategy() function that sums scores across current conditions.
-    # This mirrors exactly what regime_router.run_regime_switching_backtest() does.
+    # This mirrors exactly what regime_router.run_regime_switching_backtest() applies at runtime.
     # -----------------------------------------------------------------------
     def _build_ifelse_html() -> str:
         if not _COMBO_SCORES:
             return ''
 
         # Syntax-highlight helpers
-        def _kw(t):  return f'<span style="color:#94a3b8">{t}</span>'    # keyword/comment (grey)
-        def _kr(t):  return f'<span style="color:#f472b6">{t}</span>'    # control keyword (pink)
-        def _tx(t):  return f'<span style="color:#f1f5f9">{t}</span>'    # plain text (white)
-        def _st(t):  return f'<span style="color:#34d399">{t}</span>'    # string (green)
-        def _nm(t):  return f'<span style="color:#fbbf24">{t}</span>'    # number (yellow)
-        def _fn(t):  return f'<span style="color:#38bdf8">{t}</span>'    # function/var (blue)
+        def _kw(t):  return f'<span style="color:{MUTED}">{t}</span>'           # keyword
+        def _kr(t):  return f'<span style="color:#8e3e2f">{t}</span>'           # control
+        def _tx(t):  return f'<span style="color:{TEXT}">{t}</span>'            # plain text
+        def _st(t):  return f'<span style="color:#0f6a56">{t}</span>'           # string
+        def _cm(t):  return f'<span style="color:{MUTED};font-style:italic">{t}</span>'  # comment
 
-        BUCKET_LABELS: Dict[str, str] = {
-            'low_vol_above':  'composite · low RV, above SMA200',
-            'low_vol_below':  'composite · low RV, below SMA200',
-            'med_vol_above':  'composite · med RV, above SMA200',
-            'med_vol_below':  'composite · med RV, below SMA200',
-            'high_vol_above': 'composite · high RV, above SMA200',
-            'high_vol_below': 'composite · high RV, below SMA200',
-            'rsi_bull':       'RSI · 3-day consensus > 50',
-            'rsi_bear':       'RSI · 3-day consensus ≤ 50',
-            'vix_very_low':   'VIX · < 20th percentile',
-            'vix_low':        'VIX · 20–50th percentile',
-            'vix_elevated':   'VIX · 50–80th percentile',
-            'vix_high':       'VIX · > 80th percentile',
-        }
+        COMPOSITE_BUCKETS = [
+            'low_vol_above', 'low_vol_below',
+            'med_vol_above', 'med_vol_below',
+            'high_vol_above', 'high_vol_below',
+        ]
+        RSI_BUCKETS = ['rsi_bull', 'rsi_bear']
+        VIX_BUCKETS = ['vix_very_low', 'vix_low', 'vix_elevated', 'vix_high']
 
-        # Legend
+        live_buckets: set = set()
+        for _bs in _COMBO_SCORES.values():
+            live_buckets.update(_bs.keys())
+
+        active_comp = [b for b in COMPOSITE_BUCKETS if b in live_buckets] or COMPOSITE_BUCKETS
+        active_rsi  = [b for b in RSI_BUCKETS       if b in live_buckets] or RSI_BUCKETS
+        active_vix  = [b for b in VIX_BUCKETS       if b in live_buckets]
+        has_vix     = bool(active_vix)
+
+        def _win(conditions: list) -> str:
+            best, best_s = _default_ifelse_combo, 0.0
+            for combo, bscores in _COMBO_SCORES.items():
+                s = sum(bscores.get(c, 0.0) for c in conditions)
+                if s > best_s:
+                    best_s, best = s, combo
+            return best or _default_ifelse_combo
+
+        def _ret_tag(combo: str, score: float = 0.0) -> str:
+            col   = ifelse_combo_color.get(combo, TEXT)
+            num   = ifelse_combo_number.get(combo, '')
+            short = _short_combo(combo)
+            badge = (
+                f'<span style="background:{col}1a;border:1px solid {col}55;'
+                f'border-radius:3px;padding:1px 7px;color:{col};font-weight:bold">'
+                f'&quot;{combo}&quot;</span>'
+            )
+            score_txt = f'{score:.1f}' if score > 0 else ''
+            comment = (
+                _cm(f'  # {num} {short}' + (f'  ·  score {score_txt}' if score_txt else ''))
+                if num else ''
+            )
+            return _kr('return') + ' ' + badge + comment
+
+        code_lines: List[str] = []
+
+        # ── Header ────────────────────────────────────────────────────────────
+        code_lines.append(_cm('# Auto-Generated Strategy Routing — if-else decision tree'))
+        code_lines.append(_cm('# Inputs : composite (RV×SMA200)  ·  rsi (3-bar consensus)  ·  vix (252-day pct rank)'))
+        code_lines.append(_cm('# Filters: max_dd &gt; −8%  ·  |max_dd| ≤ ann_return / 2  ·  n ≥ 63 bars'))
+        code_lines.append(_cm('# Score  : ann_return × (1 + 0.10 × years_in_regime)'))
+        code_lines.append('')
+
+        # ── Function signature ────────────────────────────────────────────────
+        sig = 'composite: str, rsi: str, vix: str = None' if has_vix else 'composite: str, rsi: str'
+        code_lines.append(_kw('def ') + _tx('select_strategy') + _tx(f'({sig}) -> str:'))
+
+        # ── Decision tree ─────────────────────────────────────────────────────
+        for ci, comp in enumerate(active_comp):
+            kw1 = _kr('if') if ci == 0 else _kr('elif')
+            code_lines.append(f'    {kw1} composite == {_st(f"&quot;{comp}&quot;")}:')
+
+            for ri, rsi in enumerate(active_rsi):
+                # Use 'if' for first RSI, 'else' for last when only 2 buckets
+                if ri == 0:
+                    code_lines.append(f'        {_kr("if")} rsi == {_st(f"&quot;{rsi}&quot;")}:')
+                elif ri == len(active_rsi) - 1 and len(active_rsi) == 2:
+                    code_lines.append(f'        {_kr("else")}:  {_cm(f"# {rsi}")}')
+                else:
+                    code_lines.append(f'        {_kr("elif")} rsi == {_st(f"&quot;{rsi}&quot;")}:')
+
+                if has_vix:
+                    vix_wins  = {v: _win([comp, rsi, v]) for v in active_vix}
+                    novix_win = _win([comp, rsi])
+                    # Collapse if every VIX condition and no-VIX all resolve to the same strategy
+                    if len(set(vix_wins.values()) | {novix_win}) == 1:
+                        score = sum(_COMBO_SCORES.get(novix_win, {}).get(c, 0) for c in [comp, rsi])
+                        code_lines.append(f'            {_ret_tag(novix_win, score)}')
+                    else:
+                        for vi, vix in enumerate(active_vix):
+                            kw3 = _kr('if') if vi == 0 else _kr('elif')
+                            w   = vix_wins[vix]
+                            s   = sum(_COMBO_SCORES.get(w, {}).get(c, 0) for c in [comp, rsi, vix])
+                            code_lines.append(f'            {kw3} vix == {_st(f"&quot;{vix}&quot;")}:')
+                            code_lines.append(f'                {_ret_tag(w, s)}')
+                        code_lines.append(f'            {_kr("else")}:  {_cm("# VIX unavailable")}')
+                        s_nv = sum(_COMBO_SCORES.get(novix_win, {}).get(c, 0) for c in [comp, rsi])
+                        code_lines.append(f'                {_ret_tag(novix_win, s_nv)}')
+                else:
+                    w = _win([comp, rsi])
+                    s = sum(_COMBO_SCORES.get(w, {}).get(c, 0) for c in [comp, rsi])
+                    code_lines.append(f'            {_ret_tag(w, s)}')
+
+        # ── Default fallback ──────────────────────────────────────────────────
+        _def_c   = _default_ifelse_combo or (combos[0] if combos else '')
+        _def_col = ifelse_combo_color.get(_def_c, MUTED)
+        _def_badge = (
+            f'<span style="background:{_def_col}1a;border:1px solid {_def_col}55;'
+            f'border-radius:3px;padding:1px 7px;color:{_def_col};font-weight:bold">'
+            f'&quot;{_def_c}&quot;</span>'
+        )
+        code_lines.append(f'    {_kr("else")}:  {_cm("# unknown / unrecognised regime")}')
+        code_lines.append(
+            f'        {_kr("return")} {_def_badge}'
+            + _cm('  # DEFAULT — best overall OOS Calmar')
+        )
+
+        code_html = '<br>'.join(code_lines)
+
+        # ── Legend ────────────────────────────────────────────────────────────
         legend_items_html = ''
         for _c in _selected_order:
             _col  = ifelse_combo_color.get(_c, TEXT)
             _num  = ifelse_combo_number.get(_c, '')
             _tot  = sum(_COMBO_SCORES.get(_c, {}).values())
-            _note = f' <span style="color:{MUTED};font-size:10px">[Σ {_tot:.1f}]</span>' if _c in _COMBO_SCORES else f' <span style="color:{MUTED}">(DEFAULT)</span>'
+            _note = (f' <span style="color:{MUTED};font-size:10px">[Σ {_tot:.1f}]</span>'
+                     if _c in _COMBO_SCORES else
+                     f' <span style="color:{MUTED}">(DEFAULT)</span>')
             legend_items_html += (
                 f'<span style="display:inline-flex;align-items:center;margin:4px 12px 4px 0;">'
                 f'<span style="background:{_col};color:#fff;border-radius:50%;width:22px;height:22px;'
@@ -1564,101 +2285,26 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
                 f'</span>'
             )
 
-        # Code block lines
-        code_lines: List[str] = []
-        code_lines.append(_kw('# Pre-computed OOS scores per strategy across composite, RSI and VIX analyses'))
-        code_lines.append(_kw('# Filters: max_dd &gt; −8%  ·  |max_dd| ≤ ann_return / 2  ·  n ≥ 63 bars'))
-        code_lines.append(_kw('# Score = ann_return × (1 + 0.10 × years)  —  0 means failed filters'))
-        code_lines.append('')
-        code_lines.append(_fn('SCORES') + _tx(' = {'))
-
-        for _c in _selected_order:
-            if _c not in _COMBO_SCORES:
-                continue
-            _col      = ifelse_combo_color.get(_c, TEXT)
-            _num      = ifelse_combo_number.get(_c, '')
-            _tot      = sum(_COMBO_SCORES[_c].values())
-            _bkts     = sorted(_COMBO_SCORES[_c].items(), key=lambda x: x[1], reverse=True)
-            code_lines.append(_kw(f'    # {_num} {_short_combo(_c)}   Σ = {_tot:.1f}'))
-            code_lines.append(
-                f'    <span style="color:{_col};font-weight:bold">'
-                f'<span style="background:{_col}22;border-radius:3px;padding:0 5px">'
-                f'&quot;{_c}&quot;</span></span>' + _tx(': {')
-            )
-            for _b, _s in _bkts:
-                _lbl = BUCKET_LABELS.get(_b, _b)
-                code_lines.append(
-                    '        ' + _st(f'&quot;{_b}&quot;') + _tx(': ')
-                    + _nm(f'{_s:.2f}') + _tx(',')
-                    + _kw(f'  # {_lbl}')
-                )
-            code_lines.append(_tx('    },'))
-
-        code_lines.append(_tx('}'))
-        code_lines.append('')
-
-        # DEFAULT
-        _def_c   = _default_ifelse_combo or (combos[0] if combos else '')
-        _def_col = ifelse_combo_color.get(_def_c, MUTED)
-        _def_num = ifelse_combo_number.get(_def_c, '')
-        code_lines.append(
-            _fn('DEFAULT') + _tx(' = ')
-            + f'<span style="color:{_def_col};font-weight:bold">'
-              f'<span style="background:{_def_col}22;border-radius:3px;padding:0 5px">'
-              f'&quot;{_def_c}&quot;</span></span>'
-            + _kw('  # best overall OOS Calmar — used when no strategy passes filters')
-        )
-        code_lines.append('')
-
-        # select_strategy function
-        code_lines.append(
-            _kw('def ') + _fn('select_strategy') + _tx('(composite, rsi, vix=None) -> str:')
-        )
-        code_lines.append(
-            _tx('    ') + _kw('"""Sum scores across all current regime conditions → pick highest-scoring strategy."""')
-        )
-        code_lines.append(
-            _tx('    conditions = [c ') + _kw('for') + _tx(' c ') + _kw('in')
-            + _tx(' [composite, rsi, vix] ') + _kw('if') + _tx(' c]')
-        )
-        code_lines.append(_tx('    combined = {'))
-        code_lines.append(
-            _tx('        combo: sum(') + _fn('SCORES') + _tx('[combo].get(c, 0) ')
-            + _kw('for') + _tx(' c ') + _kw('in') + _tx(' conditions)')
-        )
-        code_lines.append(_tx('        ') + _kw('for') + _tx(' combo ') + _kw('in ') + _fn('SCORES'))
-        code_lines.append(_tx('    }'))
-        code_lines.append(_tx('    best = max(combined, key=combined.get)'))
-        code_lines.append(
-            _kr('    return ') + _tx('best ')
-            + _kw('if') + _tx(' combined[best] > 0 ')
-            + _kw('else ') + _fn('DEFAULT')
-        )
-
-        code_html = '<br>'.join(code_lines)
-
         return f"""
-  <!-- ── AUTO-GENERATED STRATEGY ROUTING (unified multi-dimensional) ──── -->
-  <div style="background:#0c1a2e;border:2px solid {ACCENT};border-radius:10px;
+  <!-- ── AUTO-GENERATED STRATEGY ROUTING (if-else decision tree) ──────── -->
+  <div style="background:{CARD};border:1px solid {BORDER};border-radius:10px;
               margin:28px 0 20px;padding:24px 32px;">
     <h2 style="color:{ACCENT};margin:0 0 6px;font-size:15px;letter-spacing:0.06em;text-transform:uppercase">
       Auto-Generated Strategy Routing
     </h2>
     <p style="color:{MUTED};font-size:12px;margin:0 0 18px;line-height:1.6">
-      Scores are built from <strong>all three regime analyses</strong> (composite RV×SMA200, RSI, VIX).
-      Every strategy earns a score in each regime bucket it passes the hard filters in:<br>
-      <code style="background:#1e293b;padding:2px 8px;border-radius:4px;display:inline-block;margin:4px 0">
+      Decision tree built from <strong>all three regime analyses</strong> (composite RV×SMA200, RSI, VIX).
+      For every combination of market conditions the strategy with the highest combined OOS score is selected.
+      Identical branches across conditions are collapsed automatically.<br>
+      <code style="background:#efe7da;border:1px solid {BORDER};padding:2px 8px;border-radius:4px;display:inline-block;margin:4px 0;color:{TEXT}">
         max_dd &gt; −8% &nbsp;·&nbsp; |max_dd| ≤ ann_return / 2 &nbsp;·&nbsp; n_bars ≥ 63 (~3 months)
       </code><br>
-      At runtime, <strong>current composite + RSI + VIX conditions are known simultaneously</strong>.
-      The strategy whose scores sum highest across all active conditions is selected —
-      so a strategy that works well in multiple regime dimensions beats one with a single strong match.<br>
       Circled numbers (①②…) map to the colour-coded labels in the heatmaps and Activation Guide above.
     </p>
 
     <!-- Legend -->
-    <div style="margin-bottom:18px;padding:12px 16px;background:#1e293b;
-                border-radius:6px;border:1px solid #334155;">
+    <div style="margin-bottom:18px;padding:12px 16px;background:#fffdf8;
+                border-radius:6px;border:1px solid {BORDER};">
       <span style="color:{MUTED};font-size:11px;text-transform:uppercase;
                    letter-spacing:0.08em;display:block;margin-bottom:8px">
         Strategy Legend — ranked by total score (Σ across all regime buckets)
@@ -1666,16 +2312,15 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
       <div style="display:flex;flex-wrap:wrap;">{legend_items_html}</div>
     </div>
 
-    <!-- Code block -->
-    <pre style="background:#0f172a;border:1px solid #334155;border-radius:8px;
+    <!-- If-else decision tree -->
+    <pre style="background:#fffdf8;border:1px solid {BORDER};border-radius:8px;
                 padding:20px 24px;font-family:'Consolas','Fira Code',monospace;
                 font-size:12.5px;line-height:1.8;overflow-x:auto;margin:0;">
 <code>{code_html}</code></pre>
 
-    <p style="color:{MUTED};font-size:11px;margin:14px 0 0;border-top:1px solid #334155;padding-top:10px">
-      ⚠ When combined[best] == 0 (no strategy passed filters for any active condition) the DEFAULT
-      fallback applies.  Run <code>regime_router.py --run_dir &lt;path&gt;</code> to execute the full
-      regime-switching backtest using this same logic.
+    <p style="color:{MUTED};font-size:11px;margin:14px 0 0;border-top:1px solid {BORDER};padding-top:10px">
+      Run <code>regime_router.py --run_dir &lt;path&gt;</code> to execute the full
+      auto-generated strategy routing backtest using this same logic.
     </p>
   </div>"""
 
@@ -1685,7 +2330,7 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
 <div style="font-family:'Segoe UI',system-ui,sans-serif;color:{TEXT};max-width:1300px;margin:0 auto;">
 
   <!-- ── HOW TO USE THIS REPORT ────────────────────────────────────────── -->
-  <div style="background:#0c1f2e;border:1px solid {ACCENT};border-radius:10px;
+  <div style="background:{CARD};border:1px solid {BORDER};border-radius:10px;
               margin:28px 0 20px;padding:24px 32px;">
     <h2 style="color:{ACCENT};margin:0 0 14px;font-size:15px;letter-spacing:0.06em;text-transform:uppercase">
       How to use this report
@@ -1891,25 +2536,305 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Market Regime Attribution</title>
+  <script>{get_plotlyjs()}</script>
   <style>
+    :root {{
+      --shell-bg: #efe7da;
+      --shell-tint: #f5eee3;
+      --surface: #fffdf8;
+      --surface-soft: #f7f1e8;
+      --surface-dark: #fffdf8;
+      --surface-dark-alt: #f7f1e8;
+      --ink: #162033;
+      --muted: #5d6978;
+      --subtle: #8993a2;
+      --border: #d7ccb9;
+      --accent: #163a5c;
+      --accent-soft: #2d587e;
+      --accent-gold: #9b6a2d;
+      --shadow: 0 28px 80px rgba(22, 32, 51, 0.10);
+    }}
     * {{ box-sizing: border-box; }}
+    html {{ scroll-behavior: smooth; }}
     body {{
       margin: 0;
-      padding: 24px;
-      background: {BG};
-      color: {TEXT};
+      background:
+        radial-gradient(circle at top left, rgba(255,255,255,0.75), transparent 22%),
+        linear-gradient(180deg, #f4ede1 0%, var(--shell-bg) 42%, #ebe2d3 100%);
+      color: var(--ink);
       font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
     }}
-    .plotly-container {{
-      width: 100%;
+    .shell {{
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: 28px 24px 48px;
+    }}
+    .mast {{
+      display: grid;
+      gap: 18px;
+      padding: 28px 32px 30px;
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      background:
+        radial-gradient(circle at top left, rgba(255,255,255,0.9), transparent 36%),
+        linear-gradient(135deg, rgba(255,253,248,0.98), rgba(247,241,232,0.98));
+      color: var(--ink);
+      box-shadow: var(--shadow);
+    }}
+    .mast-top {{
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }}
+    .eyebrow {{
+      margin: 0;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent-soft);
+    }}
+    .mast h1 {{
+      margin: 0;
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: clamp(34px, 5vw, 58px);
+      line-height: 0.98;
+      letter-spacing: -0.04em;
+      max-width: 12ch;
+    }}
+    .deck {{
+      margin: 0;
+      max-width: 72ch;
+      font-size: 15px;
+      line-height: 1.8;
+      color: var(--muted);
+    }}
+    .hero-grid {{
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }}
+    .hero-card {{
+      background: rgba(255,255,255,0.64);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 16px 18px;
+      min-height: 122px;
+    }}
+    .hero-label {{
+      display: block;
+      margin-bottom: 12px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--accent-soft);
+      font-weight: 700;
+    }}
+    .hero-card strong {{
+      display: block;
+      margin-bottom: 8px;
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--ink);
+    }}
+    .hero-card p {{
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.65;
+      color: var(--muted);
+    }}
+    .nav {{
+      position: sticky;
+      top: 10px;
+      z-index: 30;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 14px 16px;
+      margin: 18px 0 22px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: rgba(255,253,248,0.84);
+      backdrop-filter: blur(14px);
+      box-shadow: 0 10px 34px rgba(22, 32, 51, 0.08);
+    }}
+    .nav a {{
+      display: inline-flex;
+      align-items: center;
+      padding: 10px 14px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      text-decoration: none;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }}
+    .nav a:hover,
+    .nav a.is-active {{
+      background: var(--accent);
+      color: #fffaf2;
+    }}
+    .section {{
+      margin-bottom: 24px;
+      padding: 22px;
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      background: linear-gradient(180deg, rgba(255,253,248,0.92), rgba(247,241,232,0.96));
+      box-shadow: 0 20px 50px rgba(22, 32, 51, 0.06);
+    }}
+    .section-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-start;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }}
+    .section-kicker {{
+      margin: 0 0 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      font-size: 11px;
+      color: var(--accent-soft);
+      font-weight: 700;
+    }}
+    .section h2 {{
+      margin: 0;
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: clamp(24px, 3vw, 34px);
+      line-height: 1.04;
+      letter-spacing: -0.03em;
+    }}
+    .section p {{
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.78;
+      max-width: 74ch;
+    }}
+    .chip-row {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }}
+    .chip {{
+      display: inline-flex;
+      align-items: center;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: var(--surface-soft);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }}
+    .plot-frame {{
+      border-radius: 22px;
+      overflow: hidden;
+      background: linear-gradient(180deg, rgba(255,253,248,0.96), rgba(247,241,232,0.98));
+      border: 1px solid var(--border);
+      padding: 10px;
+    }}
+    .plotly-graph-div {{
+      border-radius: 16px;
+      overflow: hidden;
+    }}
+    .prose-wrap {{
+      padding-top: 8px;
+    }}
+    @media (max-width: 1080px) {{
+      .hero-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+    }}
+    @media (max-width: 820px) {{
+      .shell {{ padding: 18px 14px 32px; }}
+      .mast {{ padding: 22px 18px; }}
+      .hero-grid {{ grid-template-columns: 1fr; }}
+      .nav {{ border-radius: 24px; }}
+      .section {{ padding: 16px; }}
     }}
   </style>
 </head>
 <body>
-  <div class="plotly-container">
-    {plotly_div}
-  </div>
-  {glossary_html}
+  <main class="shell">
+    <header class="mast" id="overview">
+      <div class="mast-top">
+        <div>
+          <p class="eyebrow">Editorial Swiss / Product-Grade Interactivity</p>
+          <h1>Market Regime Attribution</h1>
+        </div>
+      </div>
+      <p class="deck">
+        This report is the deployment briefing for the strongest strategy permutations. The out-of-sample composite heatmap is the primary operating surface, while RSI and VIX act as secondary filters that sharpen timing without changing the underlying ranking logic.
+      </p>
+      <div class="hero-grid">
+        {hero_cards_html}
+      </div>
+    </header>
+
+    <nav class="nav" aria-label="Report sections">
+      <a href="#overview" class="is-active">Overview</a>
+      <a href="#exhibit">Heatmaps</a>
+      <a href="#guide">Activation Guide</a>
+      <a href="#notes">Methodology</a>
+    </nav>
+
+    <section class="section" id="exhibit">
+      <div class="section-head">
+        <div>
+          <p class="section-kicker">Primary Exhibit</p>
+          <h2>Composite, Momentum, and Fear Surfaces</h2>
+          <p>The main figure preserves every original section and metric, but now lives inside a clearer analytical frame. Use the OOS composite panel first, then treat the IS, RSI, and VIX panels as validation and refinement layers.</p>
+        </div>
+        <div class="chip-row">
+          <span class="chip">OOS first</span>
+          <span class="chip">IS is reference only</span>
+          <span class="chip">Hover for coverage and risk</span>
+          <span class="chip">Guide below is derived from these surfaces</span>
+        </div>
+      </div>
+      <div class="plot-frame">{plotly_div}</div>
+    </section>
+
+    <section class="section" id="guide">
+      <div class="section-head">
+        <div>
+          <p class="section-kicker">Decision Layer</p>
+          <h2>Activation Guide and Routing Logic</h2>
+          <p>The table and generated routing block below remain functionally identical to the existing system. They convert the regime observations into deployable guidance without changing the score model, filters, or fallback behavior.</p>
+        </div>
+        <div class="chip-row">
+          <span class="chip">Primary score preserved</span>
+          <span class="chip">Hard filters preserved</span>
+          <span class="chip">Runtime selection preserved</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section prose-wrap" id="notes">
+      {glossary_html}
+    </section>
+  </main>
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {{
+      const links = Array.from(document.querySelectorAll('.nav a'));
+      const sections = links
+        .map((link) => document.querySelector(link.getAttribute('href')))
+        .filter(Boolean);
+      const observer = new IntersectionObserver((entries) => {{
+        entries.forEach((entry) => {{
+          if (!entry.isIntersecting) return;
+          const id = '#' + entry.target.id;
+          links.forEach((link) => link.classList.toggle('is-active', link.getAttribute('href') === id));
+        }});
+      }}, {{ rootMargin: '-35% 0px -50% 0px', threshold: 0.1 }});
+      sections.forEach((section) => observer.observe(section));
+    }});
+  </script>
 </body>
 </html>"""
 
@@ -1930,6 +2855,7 @@ def create_joint_performance_summary(joint_data: List[Dict], save_path: str):
     """
     if not joint_data:
         return
+    t = _EDITORIAL_THEME
 
     metrics_to_plot = ['Calmar Ratio', 'Sharpe Ratio', 'Total Return Pct', 'Max Drawdown Pct']
     symbols = [d['symbol'] for d in joint_data]
@@ -1987,26 +2913,29 @@ def create_joint_performance_summary(joint_data: List[Dict], save_path: str):
             fig.add_annotation(
                 x=symbols[worst_idx],
                 y=oos_vals[worst_idx],
-                text='⚠ weakest',
+                text='Weakest link',
                 showarrow=True,
                 arrowhead=2,
-                font=dict(color='red', size=10),
+                font=dict(color=t['negative'], size=10),
                 row=row_idx, col=1,
             )
 
     combo_name = joint_data[0]['combination'].replace(joint_data[0]['symbol'] + '_', '') if joint_data else 'Joint'
-    fig.update_layout(
-        title=dict(
-            text=f'<b>Joint Optimisation — Per-Symbol Performance</b><br><sup>{combo_name}</sup>',
-            x=0.5,
-        ),
-        height=280 * len(metrics_to_plot),
-        barmode='group',
-        paper_bgcolor='#fafafa',
+    _apply_editorial_theme(
+        fig,
+        'Joint Optimisation by Symbol',
+        f'All symbols inherit the same jointly-optimized parameter set. This report shows whether that shared solution distributes evenly or hides a weak operational leg. {combo_name}',
+        height=300 * len(metrics_to_plot),
     )
-
-    if save_path:
-        fig.write_html(save_path)
+    fig.update_layout(barmode='group')
+    _write_single_figure_report(
+        fig,
+        save_path,
+        'Joint Performance Summary',
+        'Joint-Mode Drilldown',
+        'This report compares how the same jointly-optimized permutation behaves across each symbol in the basket.',
+        'The weakest symbol matters disproportionately here: a joint setup is only as strong as the asset that degrades first under the shared parameter set.',
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2021,6 +2950,28 @@ _REGIME_COLORS = {
     'high_vol_above': 'rgba(255,140,0,0.35)',
     'high_vol_below': 'rgba(220,53,69,0.35)',
     'unknown':        'rgba(200,200,200,0.15)',
+}
+
+_REGIME_COLORS_DARK = {
+    'low_vol_above':  {'bg': '#dcebe0', 'text': '#0f6a56', 'label': 'Low Vol Above SMA200'},
+    'low_vol_below':  {'bg': '#efe0bf', 'text': '#7a4d10', 'label': 'Low Vol Below SMA200'},
+    'med_vol_above':  {'bg': '#c9e4d6', 'text': '#0f6a56', 'label': 'Med Vol Above SMA200'},
+    'med_vol_below':  {'bg': '#edcfb8', 'text': '#8a431e', 'label': 'Med Vol Below SMA200'},
+    'high_vol_above': {'bg': '#e8c8ae', 'text': '#8a431e', 'label': 'High Vol Above SMA200'},
+    'high_vol_below': {'bg': '#e8c1bb', 'text': '#8e3e2f', 'label': 'High Vol Below SMA200'},
+    'unknown':        {'bg': '#ece7dd', 'text': '#667085', 'label': 'Unknown'},
+}
+
+_RSI_REGIME_COLORS = {
+    'rsi_bull': {'bg': '#dcebe0', 'text': '#0f6a56', 'label': 'RSI Bull'},
+    'rsi_bear': {'bg': '#e8c1bb', 'text': '#8e3e2f', 'label': 'RSI Bear'},
+}
+
+_VIX_REGIME_COLORS = {
+    'vix_very_low': {'bg': '#dbe7ee', 'text': '#315a7c', 'label': 'VIX Very Low'},
+    'vix_low':      {'bg': '#dcebe0', 'text': '#0f6a56', 'label': 'VIX Low'},
+    'vix_elevated': {'bg': '#edcfb8', 'text': '#8a431e', 'label': 'VIX Elevated'},
+    'vix_high':     {'bg': '#e8c1bb', 'text': '#8e3e2f', 'label': 'VIX High'},
 }
 
 
@@ -2040,13 +2991,15 @@ def _regime_segments(series: pd.Series) -> list:
     return segs
 
 
-def create_regime_switching_report(
+def create_auto_generated_strategy_routing_report(
     results: Dict[str, Dict],
     routing_table: Dict,
     save_path: str,
+    rsi_series: Optional[pd.Series] = None,
+    vix_series: Optional[pd.Series] = None,
 ) -> None:
     """
-    Self-contained HTML report for the regime-switching backtest.
+    Self-contained HTML report for the auto-generated strategy routing backtest.
 
     Sections:
       1. Routing table coloured by regime
@@ -2100,60 +3053,162 @@ def create_regime_switching_report(
         return f'{v:.{decimals}f}' if isinstance(v, float) else str(v)
 
     def _row_bg(regime):
-        c = _REGIME_COLORS.get(regime, 'rgba(240,240,240,0.5)')
-        return c.replace('0.25)', '0.45)').replace('0.30)', '0.45)').replace('0.35)', '0.45)')
+        return _REGIME_COLORS_DARK.get(regime, {'bg': '#ece7dd', 'text': '#667085'})['bg']
 
     rt_rows_html = ''
+    unassigned: List[str] = []
     for row in routing_rows:
+        # Skip unassigned composite regimes — collect them for a footer note instead
+        if row['combo'] == '(no assignment)':
+            unassigned.append(row['regime'])
+            continue
         bg = _row_bg(row['regime'])
+        is_default = row['regime'] == 'DEFAULT (fallback)'
+        dk = _REGIME_COLORS_DARK.get(row['regime'], {'bg': '#ece7dd', 'text': '#667085'})
+        regime_color = '#667085' if is_default else dk['text']
+        combo_color  = '#667085' if is_default else '#172033'
         rt_rows_html += (
-            f'<tr style="background:{bg};">'
-            f'<td style="padding:7px 12px;font-weight:bold;">{row["regime"]}</td>'
-            f'<td style="padding:7px 12px;">{row["combo"]}</td>'
-            f'<td style="padding:7px 12px;text-align:right;">{_fmt(row["ann_ret"], 1)}</td>'
-            f'<td style="padding:7px 12px;text-align:right;">{_fmt(row["sharpe"], 3)}</td>'
-            f'<td style="padding:7px 12px;text-align:right;">{_fmt(row["score"], 3)}</td>'
-            f'<td style="padding:7px 12px;text-align:right;">{row["n_bars"]}</td>'
+            f'<tr style="background:{bg};border-bottom:1px solid #d8cfbf;">'
+            f'<td style="padding:9px 14px;font-weight:700;color:{regime_color};">{row["regime"]}</td>'
+            f'<td style="padding:9px 14px;color:{combo_color};font-family:monospace;font-size:12px;">{row["combo"]}</td>'
+            f'<td style="padding:9px 14px;text-align:right;color:#172033;">{_fmt(row["ann_ret"], 1)}</td>'
+            f'<td style="padding:9px 14px;text-align:right;color:#172033;">{_fmt(row["score"], 2)}</td>'
+            f'<td style="padding:9px 14px;text-align:right;color:#667085;">{row["n_bars"]}</td>'
             f'</tr>\n'
         )
+    unassigned_note = (
+        f'<p style="color:#667085;font-size:11px;margin:6px 0 0;font-family:sans-serif">'
+        f'⚠ No strategy passed the hard filters for: '
+        f'<span style="color:#172033">{", ".join(unassigned)}</span> — '
+        f'DEFAULT fallback applies for those regimes.'
+        f'</p>'
+    ) if unassigned else ''
 
     routing_table_html = f"""
-<table style="width:100%;border-collapse:collapse;font-family:monospace;font-size:13px;margin-bottom:30px;">
+<table style="width:100%;border-collapse:collapse;font-family:'Consolas','Fira Code',monospace;
+              font-size:13px;margin-bottom:30px;background:#fffdf8;border:1px solid #d8cfbf;border-radius:8px;overflow:hidden;">
   <thead>
-    <tr style="background:#333;color:#fff;">
-      <th style="padding:8px 12px;text-align:left;">Regime</th>
-      <th style="padding:8px 12px;text-align:left;">Assigned Strategy</th>
-      <th style="padding:8px 12px;text-align:right;">OOS Ann Ret (%)</th>
-      <th style="padding:8px 12px;text-align:right;">OOS Sharpe</th>
-      <th style="padding:8px 12px;text-align:right;">Score</th>
-      <th style="padding:8px 12px;text-align:right;">N Bars</th>
+    <tr style="background:#f1eadf;">
+      <th style="padding:10px 14px;text-align:left;color:#163a5c;font-weight:600;">Composite Regime</th>
+      <th style="padding:10px 14px;text-align:left;color:#163a5c;font-weight:600;">Assigned Strategy (composite fallback)</th>
+      <th style="padding:10px 14px;text-align:right;color:#163a5c;font-weight:600;">OOS Ann Ret (%)</th>
+      <th style="padding:10px 14px;text-align:right;color:#163a5c;font-weight:600;">Score</th>
+      <th style="padding:10px 14px;text-align:right;color:#163a5c;font-weight:600;">N Bars</th>
     </tr>
   </thead>
   <tbody>
     {rt_rows_html}
   </tbody>
-</table>"""
+</table>
+{unassigned_note}
+<p style="color:#667085;font-size:11px;margin:8px 0 28px;font-family:sans-serif">
+  ⓘ This table shows the composite-only fallback routing. At runtime, the full decision
+  tree (composite × RSI × VIX) from the Attribution report is used to select the strategy.
+</p>"""
 
     # --- 2. Equity curve plots per symbol --------------------------------
-    equity_divs = []
+    # Build combo → colour map (same palette + ordering as attribution report)
+    _SIGNAL_PALETTE = [
+        '#3b82f6', '#10b981', '#f59e0b', '#ef4444',
+        '#8b5cf6', '#06b6d4', '#f97316', '#84cc16',
+        '#ec4899', '#a855f7', '#0ea5e9', '#22c55e',
+    ]
+    _combo_scores_rt = routing_table.get('combo_scores', {})
+    _sorted_combos   = sorted(
+        _combo_scores_rt.keys(),
+        key=lambda c: sum(_combo_scores_rt[c].values()),
+        reverse=True,
+    )
+    _combo_color_map: Dict[str, str] = {
+        c: _SIGNAL_PALETTE[i % len(_SIGNAL_PALETTE)]
+        for i, c in enumerate(_sorted_combos)
+    }
+    _dflt_combo = routing_table.get('default', {}).get('combo', '')
+    if _dflt_combo and _dflt_combo not in _combo_color_map:
+        _combo_color_map[_dflt_combo] = _SIGNAL_PALETTE[len(_sorted_combos) % len(_SIGNAL_PALETTE)]
+
+    def _short_label(combo: str) -> str:
+        """Compact readable label: strip common suffixes/prefixes."""
+        for suffix in ('_fixed_tp_sl_1day', '_no_exit_1day', '_1day'):
+            if combo.endswith(suffix):
+                combo = combo[:-len(suffix)]
+                break
+        return combo.replace('_', ' ')
+
+    def _window_series(series: Optional[pd.Series], index: pd.Index) -> pd.Series:
+        if series is None or series.empty or len(index) == 0:
+            return pd.Series(dtype=object)
+        return series.loc[(series.index >= index.min()) & (series.index <= index.max())].dropna().copy()
+
+    def _add_regime_strip(fig: go.Figure, series: pd.Series, row: int, palette: Dict[str, Dict], opacity: float = 0.55) -> None:
+        if series.empty:
+            return
+        fig.add_trace(go.Scatter(
+            x=[series.index.min(), series.index.max()],
+            y=[0.5, 0.5],
+            mode='lines',
+            line=dict(color='rgba(0,0,0,0)'),
+            hoverinfo='skip',
+            showlegend=False,
+        ), row=row, col=1)
+        for seg_start, seg_end, regime in _regime_segments(series):
+            meta = palette.get(str(regime), {'bg': '#ece7dd', 'text': '#667085', 'label': str(regime)})
+            fig.add_vrect(
+                x0=seg_start, x1=seg_end,
+                fillcolor=meta['bg'],
+                opacity=opacity,
+                line_width=0,
+                layer='below',
+                row=row, col=1,
+            )
+            fig.add_trace(go.Scatter(
+                x=[seg_start, seg_end],
+                y=[0.5, 0.5],
+                mode='lines',
+                line=dict(color=meta.get('text', '#667085'), width=8),
+                opacity=0.32,
+                hovertemplate=(
+                    f'<b>{meta.get("label", regime)}</b><br>'
+                    f'{seg_start:%Y-%m-%d} to {seg_end:%Y-%m-%d}<extra></extra>'
+                ),
+                showlegend=False,
+            ), row=row, col=1)
+
+    equity_panels = []
     for symbol, data in results.items():
         equity_df     = data.get('equity_df', pd.DataFrame())
-        regime_series = data.get('regime_series', pd.Series(dtype=object))
+        regime_series = _window_series(data.get('regime_series', pd.Series(dtype=object)), equity_df.index)
 
         if equity_df.empty:
             continue
 
-        fig = go.Figure()
+        strip_rows = []
+        if not regime_series.empty:
+            strip_rows.append(('Composite', regime_series, _REGIME_COLORS_DARK))
+        rsi_window = _window_series(rsi_series, equity_df.index)
+        vix_window = _window_series(vix_series, equity_df.index)
+        if not rsi_window.empty:
+            strip_rows.append(('RSI', rsi_window, _RSI_REGIME_COLORS))
+        if not vix_window.empty:
+            strip_rows.append(('VIX', vix_window, _VIX_REGIME_COLORS))
 
-        # Regime background bands
-        for seg_start, seg_end, regime in _regime_segments(regime_series):
-            color = _REGIME_COLORS.get(str(regime), _REGIME_COLORS['unknown'])
+        total_rows = 1 + len(strip_rows)
+        fig = make_subplots(
+            rows=total_rows,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.02,
+            row_heights=[0.78] + [0.075] * len(strip_rows),
+        )
+
+        # Regime background bands use low-contrast tints so signals remain legible.
+        segs = _regime_segments(regime_series)
+        for seg_start, seg_end, regime in segs:
+            dk = _REGIME_COLORS_DARK.get(str(regime), _REGIME_COLORS_DARK['unknown'])
             fig.add_vrect(
                 x0=seg_start, x1=seg_end,
-                fillcolor=color, line_width=0, layer='below',
-                annotation_text=str(regime),
-                annotation_position='top left',
-                annotation=dict(font_size=8, font_color='#555'),
+                fillcolor=dk['bg'], opacity=0.10, line_width=0, layer='below',
+                row=1, col=1,
             )
 
         # Strategy equity curve
@@ -2161,9 +3216,9 @@ def create_regime_switching_report(
             x=equity_df.index,
             y=equity_df['total_value'],
             mode='lines',
-            name='Regime-Switching Strategy',
-            line=dict(color='#1f77b4', width=2),
-        ))
+            name='Auto-Routing Strategy',
+            line=dict(color='#163a5c', width=2.4),
+        ), row=1, col=1)
 
         # Benchmark
         if 'benchmark_value' in equity_df.columns:
@@ -2171,61 +3226,288 @@ def create_regime_switching_report(
                 x=equity_df.index,
                 y=equity_df['benchmark_value'],
                 mode='lines',
-                name='Buy & Hold',
-                line=dict(color='#999', width=1.5, dash='dot'),
-            ))
+                name='Buy &amp; Hold',
+                line=dict(color='#7f8792', width=1.6, dash='dot'),
+            ), row=1, col=1)
+
+        # ── Buy / Sell / Exit signal arrows, coloured per active strategy ──
+        if 'segment_carry_in' in equity_df.columns:
+            _carry = equity_df[equity_df['segment_carry_in'].notna()]
+            if not _carry.empty:
+                _carry = _carry.copy()
+
+                def _carry_direction(row: pd.Series) -> str:
+                    raw = str(row.get('segment_carry_in', '')).lower()
+                    if raw in ('long', 'short'):
+                        return raw
+                    shares = row.get('shares', np.nan)
+                    if pd.notna(shares) and abs(float(shares)) > 1e-9:
+                        return 'long' if float(shares) > 0 else 'short'
+                    return 'exposure'
+
+                _carry['_carry_direction'] = _carry.apply(_carry_direction, axis=1)
+                _carry['_carry_label'] = _carry.get(
+                    'segment_carry_in_label',
+                    pd.Series(index=_carry.index, dtype=object),
+                ).fillna(_carry['_carry_direction'].map({
+                    'long': 'Already LONG at segment start',
+                    'short': 'Already SHORT at segment start',
+                    'exposure': 'Carry-in exposure at segment start',
+                }))
+                carry_specs = {
+                    'long': ('Carry-In Long Exposure', 'circle-open', '#163a5c', 1.014),
+                    'short': ('Carry-In Short Exposure', 'square-open', '#8e3e2f', 0.986),
+                    'exposure': ('Carry-In Exposure', 'circle-open', '#163a5c', 1.014),
+                }
+                for _direction, (_name, _symbol, _color, _mult) in carry_specs.items():
+                    _carry_dir = _carry[_carry['_carry_direction'] == _direction]
+                    if _carry_dir.empty:
+                        continue
+                    fig.add_trace(go.Scatter(
+                        x=_carry_dir.index,
+                        y=_carry_dir['total_value'] * _mult,
+                        customdata=_carry_dir['total_value'],
+                        text=_carry_dir['_carry_label'],
+                        mode='markers',
+                        name=_name,
+                        marker=dict(
+                            symbol=_symbol,
+                            size=12,
+                            color=_color,
+                            line=dict(color=_color, width=2),
+                        ),
+                        hovertemplate=(
+                            '<b>%{text}</b><br>'
+                            '%{x|%Y-%m-%d}<br>'
+                            'The position was already open when this routed regime segment began; '
+                            'entry occurred before the visible segment.<br>'
+                            'Portfolio: $%{customdata:,.0f}<extra></extra>'
+                        ),
+                    ), row=1, col=1)
+
+        has_signals = 'strategy_combo' in equity_df.columns and \
+                      any(c in equity_df.columns for c in
+                          ('long_entry_marker', 'short_entry_marker', 'exit_marker'))
+        if has_signals:
+            added_combos: set = set()
+            for _combo in equity_df['strategy_combo'].dropna().unique():
+                _col   = _combo_color_map.get(_combo, '#94a3b8')
+                _label = _short_label(_combo)
+                _mask  = equity_df['strategy_combo'] == _combo
+                _seg   = equity_df[_mask]
+
+                # Long entries — triangle-up
+                if 'long_entry_marker' in _seg.columns:
+                    _buys = _seg[_seg['long_entry_marker'].notna()]
+                    if not _buys.empty:
+                        fig.add_trace(go.Scatter(
+                            x=_buys.index,
+                            y=_buys['total_value'] * 1.006,
+                            mode='markers',
+                            name=f'Long Entry · {_label}',
+                            legendgroup=_combo,
+                            showlegend=_combo not in added_combos,
+                            marker=dict(
+                                symbol='triangle-up', size=11, color=_col,
+                                line=dict(color='#fffdf8', width=0.9),
+                            ),
+                            hovertemplate=(
+                                f'<b>BUY</b> · {_label}<br>'
+                                f'%{{x|%Y-%m-%d}}<br>'
+                                f'Portfolio: $%{{y:,.0f}}<extra></extra>'
+                            ),
+                        ), row=1, col=1)
+                        added_combos.add(_combo)
+
+                # Short entries — triangle-down
+                if 'short_entry_marker' in _seg.columns:
+                    _shorts = _seg[_seg['short_entry_marker'].notna()]
+                    if not _shorts.empty:
+                        fig.add_trace(go.Scatter(
+                            x=_shorts.index,
+                            y=_shorts['total_value'] * 0.994,
+                            mode='markers',
+                            name=f'Short Entry · {_label}',
+                            legendgroup=_combo,
+                            showlegend=_combo not in added_combos,
+                            marker=dict(
+                                symbol='triangle-down', size=11, color=_col,
+                                line=dict(color='#fffdf8', width=0.9),
+                            ),
+                            hovertemplate=(
+                                f'<b>SHORT</b> · {_label}<br>'
+                                f'%{{x|%Y-%m-%d}}<br>'
+                                f'Portfolio: $%{{y:,.0f}}<extra></extra>'
+                            ),
+                        ), row=1, col=1)
+                        added_combos.add(_combo)
+
+                # Strategy exits — X marker, slightly smaller
+                if 'exit_marker' in _seg.columns:
+                    _exits = _seg[_seg['exit_marker'].notna()]
+                    if not _exits.empty:
+                        fig.add_trace(go.Scatter(
+                            x=_exits.index,
+                            y=_exits['total_value'] * 0.986,
+                            mode='markers',
+                            name=f'Exit · {_label}',
+                            legendgroup=_combo,
+                            showlegend=False,   # exits share legend group with entry
+                            marker=dict(
+                                symbol='x', size=7, color=_col, opacity=0.62,
+                                line=dict(color=_col, width=1.5),
+                            ),
+                            hovertemplate=(
+                                f'<b>EXIT</b> · {_label}<br>'
+                                f'%{{x|%Y-%m-%d}}<br>'
+                                f'Portfolio: $%{{y:,.0f}}<extra></extra>'
+                            ),
+                        ), row=1, col=1)
+
+            # Regime-switch forced exits — one shared trace across all combos,
+            # distinct amber diamond so they stand out from strategy-driven signals
+            if 'regime_switch_exit' in equity_df.columns:
+                _rsx = equity_df[equity_df['regime_switch_exit'].notna()]
+                if not _rsx.empty:
+                    # Annotate with which combo was active when regime switched
+                    _rsx_combo = _rsx['strategy_combo'] if 'strategy_combo' in _rsx.columns else [''] * len(_rsx)
+                    _hover = [
+                        f'<b>⚡ REGIME SWITCH EXIT</b><br>'
+                        f'{str(idx)[:10]}<br>'
+                        f'Active strategy: {c}<br>'
+                        f'Portfolio: ${v:,.0f}'
+                        f'<extra></extra>'
+                        for idx, v, c in zip(_rsx.index, _rsx['total_value'], _rsx_combo)
+                    ]
+                    fig.add_trace(go.Scatter(
+                        x=_rsx.index,
+                        y=_rsx['total_value'] * 0.974,
+                        mode='markers',
+                        name='Regime Switch Exit',
+                        legendgroup='regime_switch_exit',
+                        showlegend=True,
+                        marker=dict(
+                            symbol='diamond-open', size=12,
+                            color='#b1762d',
+                            line=dict(color='#b1762d', width=2),
+                        ),
+                        hovertemplate=_hover,
+                    ), row=1, col=1)
+
+        for strip_row, (strip_label, strip_series, strip_palette) in enumerate(strip_rows, start=2):
+            _add_regime_strip(fig, strip_series, strip_row, strip_palette, opacity=0.62)
+            fig.update_yaxes(
+                title=dict(text=strip_label, font=dict(color='#315a7c', size=10)),
+                showticklabels=False,
+                showgrid=False,
+                zeroline=False,
+                range=[0, 1],
+                row=strip_row,
+                col=1,
+            )
 
         m = data.get('metrics', {})
+        ann  = m.get('Ann Return Pct', 0)
+        shp  = m.get('Sharpe Ratio', 0)
+        mdd  = m.get('Max Drawdown Pct', 0)
+        cal  = m.get('Calmar Ratio', 0)
         subtitle = (
-            f"Ann={m.get('Ann Return Pct', 0):.1f}%  "
-            f"Sharpe={m.get('Sharpe Ratio', 0):.3f}  "
-            f"MaxDD={m.get('Max Drawdown Pct', 0):.1f}%  "
-            f"Calmar={m.get('Calmar Ratio', 0):.3f}"
+            f'Ann {ann:+.1f}%  ·  Sharpe {shp:.2f}  ·  Max DD {mdd:.1f}%  ·  Calmar {cal:.2f}'
         )
         fig.update_layout(
             title=dict(
-                text=f'<b>{symbol} \u2014 Regime-Switching OOS Equity Curve</b>'
-                     f'<br><sup>{subtitle}</sup>',
-                x=0.5,
+                text=(
+                    f'<b style="color:#172033">{symbol} Routed OOS Equity</b>'
+                    f'<br><sup style="color:#667085">{subtitle}</sup>'
+                ),
+                x=0.02,
+                xanchor='left',
+                font=dict(size=18),
             ),
-            height=420,
-            xaxis_title='Date',
-            yaxis_title='Portfolio Value ($)',
-            paper_bgcolor='#fafafa',
-            plot_bgcolor='#fff',
-            legend=dict(orientation='h', y=-0.18),
+            height=560 + 44 * len(strip_rows),
+            paper_bgcolor='#fffdf8',
+            plot_bgcolor='#f8f2e9',
+            font=dict(color='#172033'),
+            hovermode='closest',
+            hoverlabel=dict(bgcolor='#fffdf8', bordercolor='#d8cfbf', font=dict(color='#172033')),
+            legend=dict(
+                orientation='h', y=-0.18,
+                bgcolor='rgba(255,253,248,0.94)', bordercolor='#d8cfbf', borderwidth=1,
+                font=dict(color='#172033', size=11),
+                itemsizing='constant',
+            ),
+            margin=dict(l=68, r=30, t=78, b=92),
         )
-        equity_divs.append(fig.to_html(full_html=False, include_plotlyjs=False))
+        fig.update_yaxes(
+            title_text='Portfolio Value ($)',
+            tickprefix='$',
+            tickformat=',.0f',
+            gridcolor='#ddd2c0',
+            linecolor='#c8bba7',
+            tickfont=dict(color='#667085'),
+            row=1,
+            col=1,
+        )
+        for axis_row in range(1, total_rows + 1):
+            fig.update_xaxes(
+                gridcolor='#ddd2c0',
+                linecolor='#c8bba7',
+                tickfont=dict(color='#667085'),
+                row=axis_row,
+                col=1,
+            )
+        fig.update_xaxes(title_text='Date', row=total_rows, col=1)
+        equity_panels.append((symbol, fig.to_html(full_html=False, include_plotlyjs=False)))
 
-    equity_plots_html = '\n'.join(equity_divs) if equity_divs else '<p>No equity curves generated.</p>'
+    if equity_panels:
+        equity_tab_buttons = ''.join(
+            f'<button class="tab-button {"is-active" if idx == 0 else ""}" '
+            f'data-tab-target="equity-{idx}" type="button">{symbol}</button>'
+            for idx, (symbol, _) in enumerate(equity_panels)
+        )
+        equity_plot_panels = ''.join(
+            f'<div class="tab-panel {"is-active" if idx == 0 else ""}" id="equity-{idx}">{panel_html}</div>'
+            for idx, (_, panel_html) in enumerate(equity_panels)
+        )
+        equity_plots_html = (
+            f'<div class="tab-bar">{equity_tab_buttons}</div>'
+            f'<div class="tab-shell">{equity_plot_panels}</div>'
+        )
+    else:
+        equity_plots_html = '<p class="empty-copy">No equity curves generated.</p>'
 
     # --- 3. Metrics summary table ----------------------------------------
     metric_keys   = ['Total Return Pct', 'Ann Return Pct', 'Sharpe Ratio', 'Max Drawdown Pct', 'Calmar Ratio']
     metric_labels = ['Total Return (%)', 'Ann Return (%)', 'Sharpe',        'Max DD (%)',        'Calmar']
 
     header_cells = ''.join(
-        f'<th style="padding:8px 12px;text-align:right;">{lbl}</th>' for lbl in metric_labels
+        f'<th style="padding:10px 14px;text-align:right;color:#163a5c;font-weight:600;">{lbl}</th>'
+        for lbl in metric_labels
     )
+    _td   = 'padding:9px 14px;text-align:right;color:#172033;border-bottom:1px solid #d8cfbf;'
+    _td_m = 'padding:9px 14px;text-align:right;color:#667085;border-bottom:1px solid #d8cfbf;'
+    _td_s = 'padding:9px 14px;font-weight:600;color:#163a5c;border-bottom:1px solid #d8cfbf;'
     met_rows_html = ''
     for symbol, data in results.items():
         m = data.get('metrics', {})
         cells = ''.join(
-            f'<td style="padding:7px 12px;text-align:right;">{m[k]:.2f}</td>'
+            f'<td style="{_td}">{m[k]:.2f}</td>'
             if isinstance(m.get(k), float) else
-            '<td style="padding:7px 12px;text-align:right;">\u2014</td>'
+            f'<td style="{_td_m}">\u2014</td>'
             for k in metric_keys
         )
         met_rows_html += (
             f'<tr>'
-            f'<td style="padding:7px 12px;font-weight:bold;">{symbol}</td>'
+            f'<td style="{_td_s}">{symbol}</td>'
             f'{cells}</tr>\n'
         )
 
     metrics_table_html = f"""
-<table style="width:100%;border-collapse:collapse;font-family:monospace;font-size:13px;margin-bottom:30px;">
+<table style="width:100%;border-collapse:collapse;font-family:'Consolas','Fira Code',monospace;
+              font-size:13px;margin-bottom:30px;background:#fffdf8;border:1px solid #d8cfbf;border-radius:8px;overflow:hidden;">
   <thead>
-    <tr style="background:#333;color:#fff;">
-      <th style="padding:8px 12px;text-align:left;">Symbol</th>
+    <tr style="background:#f1eadf;">
+      <th style="padding:10px 14px;text-align:left;color:#163a5c;font-weight:600;">Symbol</th>
       {header_cells}
     </tr>
   </thead>
@@ -2234,50 +3516,401 @@ def create_regime_switching_report(
   </tbody>
 </table>"""
 
-    # --- 4. Legend key for regime colours --------------------------------
+    # --- 4. RSI + VIX routing tables (from combo_scores) ----------------
+    _RSI_COLORS = {
+        'rsi_bull': {'bg': '#dcebe0', 'text': '#0f6a56', 'label': 'RSI Bull (consensus > 50)'},
+        'rsi_bear': {'bg': '#e8c1bb', 'text': '#8e3e2f', 'label': 'RSI Bear (consensus ≤ 50)'},
+    }
+    _VIX_COLORS = {
+        'vix_very_low': {'bg': '#dbe7ee', 'text': '#315a7c', 'label': 'VIX Very Low (< 20th pct)'},
+        'vix_low':      {'bg': '#dcebe0', 'text': '#0f6a56', 'label': 'VIX Low (20–50th pct)'},
+        'vix_elevated': {'bg': '#edcfb8', 'text': '#8a431e', 'label': 'VIX Elevated (50–80th pct)'},
+        'vix_high':     {'bg': '#e8c1bb', 'text': '#8e3e2f', 'label': 'VIX High (> 80th pct)'},
+    }
+
+    combo_scores = routing_table.get('combo_scores', {})
+    dflt_combo   = routing_table.get('default', {}).get('combo', '—')
+
+    def _best_for_bucket(bucket: str) -> tuple:
+        best, best_s = None, 0.0
+        for combo, bscores in combo_scores.items():
+            s = bscores.get(bucket, 0.0)
+            if s > best_s:
+                best_s, best = s, combo
+        return (best or dflt_combo, best_s)
+
+    def _routing_mini_table(buckets_meta: Dict) -> str:
+        rows = ''
+        for bucket, meta in buckets_meta.items():
+            best_combo, best_score = _best_for_bucket(bucket)
+            is_default = best_score == 0.0
+            bg   = meta['bg']
+            text = meta['text']
+            combo_txt = f'{best_combo}  <span style="color:#667085;font-size:11px">(DEFAULT fallback)</span>' if is_default else best_combo
+            rows += (
+                f'<tr style="background:{bg};border-bottom:1px solid #d8cfbf;">'
+                f'<td style="padding:9px 14px;font-weight:700;color:{text}">{meta["label"]}</td>'
+                f'<td style="padding:9px 14px;color:#172033;font-family:monospace;font-size:12px">{combo_txt}</td>'
+                f'<td style="padding:9px 14px;text-align:right;color:#172033">'
+                f'{"—" if is_default else f"{best_score:.2f}"}</td>'
+                f'</tr>\n'
+            )
+        return rows
+
+    rsi_rows = _routing_mini_table(_RSI_COLORS)
+    vix_rows = _routing_mini_table(_VIX_COLORS)
+    _th = 'padding:10px 14px;color:#163a5c;font-weight:600;'
+
+    rsi_table_html = f"""
+<table style="width:100%;border-collapse:collapse;font-family:'Consolas','Fira Code',monospace;
+              font-size:13px;margin-bottom:10px;background:#fffdf8;border:1px solid #d8cfbf;border-radius:8px;overflow:hidden;">
+  <thead><tr style="background:#f1eadf;">
+    <th style="{_th}text-align:left;">RSI Regime</th>
+    <th style="{_th}text-align:left;">Best Strategy for this RSI Zone</th>
+    <th style="{_th}text-align:right;">Score</th>
+  </tr></thead>
+  <tbody>{rsi_rows}</tbody>
+</table>"""
+
+    vix_table_html = f"""
+<table style="width:100%;border-collapse:collapse;font-family:'Consolas','Fira Code',monospace;
+              font-size:13px;margin-bottom:30px;background:#fffdf8;border:1px solid #d8cfbf;border-radius:8px;overflow:hidden;">
+  <thead><tr style="background:#f1eadf;">
+    <th style="{_th}text-align:left;">VIX Regime</th>
+    <th style="{_th}text-align:left;">Best Strategy for this VIX Zone</th>
+    <th style="{_th}text-align:right;">Score</th>
+  </tr></thead>
+  <tbody>{vix_rows}</tbody>
+</table>"""
+
+    # --- 5. Regime timeline (composite + RSI + VIX over OOS period) ------
+    timeline_html = ''
+    ref_regime = next(iter(results.values()), {}).get('regime_series', pd.Series(dtype=object))
+    if not ref_regime.empty:
+        from plotly.subplots import make_subplots as _make_subplots
+
+        has_rsi_tl = rsi_series is not None and not rsi_series.empty
+        has_vix_tl = vix_series is not None and not vix_series.empty
+
+        n_rows = 1 + int(has_rsi_tl) + int(has_vix_tl)
+        rh = ([0.6, 0.2, 0.2] if n_rows == 3 else
+              [0.7, 0.3]       if n_rows == 2 else [1.0])
+        row_titles = ['Composite Regime'] + (['RSI Regime'] if has_rsi_tl else []) + (['VIX Regime'] if has_vix_tl else [])
+
+        tl_fig = _make_subplots(rows=n_rows, cols=1, shared_xaxes=True,
+                                row_heights=rh, vertical_spacing=0.04,
+                                subplot_titles=row_titles)
+
+        # Dummy traces so Plotly knows the x-range for each row
+        for r in range(1, n_rows + 1):
+            tl_fig.add_trace(go.Scatter(
+                x=[ref_regime.index[0], ref_regime.index[-1]],
+                y=[0.5, 0.5], mode='lines',
+                line=dict(color='rgba(0,0,0,0)'),
+                showlegend=False, hoverinfo='skip',
+            ), row=r, col=1)
+
+        # Row 1: composite
+        for seg_s, seg_e, regime in _regime_segments(ref_regime):
+            dk = _REGIME_COLORS_DARK.get(str(regime), _REGIME_COLORS_DARK['unknown'])
+            tl_fig.add_vrect(x0=seg_s, x1=seg_e, fillcolor=dk['bg'], opacity=0.28,
+                             line_width=0, row=1, col=1)
+
+        # Row 2: RSI
+        if has_rsi_tl:
+            rsi_row = 2
+            for seg_s, seg_e, regime in _regime_segments(rsi_series):
+                r_str = str(regime)
+                if r_str in ('unknown', 'unavailable'):
+                    continue
+                dk = _RSI_COLORS.get(r_str, {'bg': '#ece7dd'})
+                tl_fig.add_vrect(x0=seg_s, x1=seg_e, fillcolor=dk['bg'], opacity=0.28,
+                                 line_width=0, row=rsi_row, col=1)
+
+        # Row 3: VIX
+        if has_vix_tl:
+            vix_row = 2 + int(has_rsi_tl)
+            for seg_s, seg_e, regime in _regime_segments(vix_series):
+                r_str = str(regime)
+                if r_str in ('unknown', 'unavailable'):
+                    continue
+                dk = _VIX_COLORS.get(r_str, {'bg': '#ece7dd'})
+                tl_fig.add_vrect(x0=seg_s, x1=seg_e, fillcolor=dk['bg'], opacity=0.28,
+                                 line_width=0, row=vix_row, col=1)
+
+        tl_fig.update_layout(
+            height=80 + n_rows * 80,
+            paper_bgcolor='#fffdf8', plot_bgcolor='#f8f2e9',
+            font=dict(color='#667085', size=11),
+            margin=dict(l=10, r=10, t=40, b=10),
+            showlegend=False,
+        )
+        for r in range(1, n_rows + 1):
+            tl_fig.update_yaxes(visible=False, row=r, col=1)
+            tl_fig.update_xaxes(
+                gridcolor='#ddd2c0', linecolor='#c8bba7',
+                tickfont=dict(color='#667085', size=10),
+                row=r, col=1,
+            )
+        for ann in tl_fig.layout.annotations:
+            ann.update(font=dict(color='#163a5c', size=11), bgcolor='#fffdf8',
+                       bordercolor='#d8cfbf', borderwidth=0)
+
+        timeline_html = tl_fig.to_html(full_html=False, include_plotlyjs=False)
+
+    # --- 7. Regime colour key --------------------------------------------
+    _REGIME_FRIENDLY_LABELS = {
+        'low_vol_above':  'Low Vol · Above SMA200',
+        'low_vol_below':  'Low Vol · Below SMA200',
+        'med_vol_above':  'Med Vol · Above SMA200',
+        'med_vol_below':  'Med Vol · Below SMA200',
+        'high_vol_above': 'High Vol · Above SMA200',
+        'high_vol_below': 'High Vol · Below SMA200',
+        'unknown':        'Unknown',
+    }
     legend_items = ''.join(
-        f'<span style="display:inline-block;padding:4px 10px;border-radius:4px;'
-        f'background:{c};font-family:monospace;font-size:12px;margin:3px;">{r}</span>'
-        for r, c in _REGIME_COLORS.items()
+        f'<span style="display:inline-flex;align-items:center;padding:6px 14px;'
+        f'border-radius:6px;background:{_REGIME_COLORS_DARK[r]["bg"]};'
+        f'font-family:monospace;font-size:12px;font-weight:600;'
+        f'margin:4px 6px 4px 0;color:{_REGIME_COLORS_DARK[r]["text"]};">'
+        f'{_REGIME_FRIENDLY_LABELS.get(r, r)}</span>'
+        for r in _REGIME_COLORS_DARK if r != 'unknown'
     )
+
+    hero_cards_html = f"""
+    <article class="hero-card">
+      <span class="hero-label">Symbols Routed</span>
+      <strong>{len(results)}</strong>
+      <p>Symbols with completed out-of-sample routing backtests in this report.</p>
+    </article>
+    <article class="hero-card">
+      <span class="hero-label">Composite Buckets</span>
+      <strong>{len(routing_table.get('routing', {}))}</strong>
+      <p>Composite regimes that received an explicit routed strategy before fallback.</p>
+    </article>
+    <article class="hero-card">
+      <span class="hero-label">Runtime Inputs</span>
+      <strong>{'Composite + RSI + VIX' if vix_series is not None and not vix_series.empty else 'Composite + RSI'}</strong>
+      <p>The live decision engine still sums scores across the same active dimensions as before.</p>
+    </article>
+    <article class="hero-card">
+      <span class="hero-label">Fallback Strategy</span>
+      <strong>{dflt.get('combo', 'N/A')}</strong>
+      <p>Used whenever no routed candidate clears the hard filters for the observed condition stack.</p>
+    </article>
+    """
 
     # --- Assemble final HTML ---------------------------------------------
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Regime-Switching Backtest Report</title>
-  <script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Auto Generated Strategy Routing Backtest</title>
+  <script>{get_plotlyjs()}</script>
   <style>
-    body  {{font-family:Arial,sans-serif;background:#f4f4f4;padding:20px;color:#222;}}
-    h1    {{text-align:center;color:#333;margin-bottom:8px;}}
-    h2    {{color:#444;border-bottom:2px solid #ccc;padding-bottom:5px;margin-top:40px;}}
-    .wrap {{max-width:1400px;margin:0 auto;background:#fff;padding:30px;border-radius:8px;
-            box-shadow:0 2px 12px rgba(0,0,0,.1);}}
-    p.sub {{text-align:center;color:#666;margin-top:0;}}
+    :root {{
+      --shell-bg: #efe7da;
+      --shell-tint: #f5eee3;
+      --surface: #fffdf8;
+      --surface-soft: #f7f1e8;
+      --surface-dark: #fffdf8;
+      --surface-dark-alt: #f7f1e8;
+      --ink: #162033;
+      --muted: #5d6978;
+      --border: #d7ccb9;
+      --accent: #163a5c;
+      --accent-soft: #2d587e;
+      --shadow: 0 28px 80px rgba(22, 32, 51, 0.10);
+    }}
+    * {{ box-sizing: border-box; }}
+    html {{ scroll-behavior: smooth; }}
+    body {{
+      margin: 0;
+      background:
+        radial-gradient(circle at top left, rgba(255,255,255,0.75), transparent 22%),
+        linear-gradient(180deg, #f4ede1 0%, var(--shell-bg) 42%, #ebe2d3 100%);
+      color: var(--ink);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }}
+    .shell {{ max-width: 1480px; margin: 0 auto; padding: 28px 24px 48px; }}
+    .mast {{
+      display: grid;
+      gap: 18px;
+      padding: 28px 32px 30px;
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      background:
+        radial-gradient(circle at 88% 8%, rgba(22,58,92,0.10), transparent 30%),
+        linear-gradient(135deg, rgba(255,253,248,0.98), rgba(239,231,218,0.94));
+      color: var(--ink);
+      box-shadow: var(--shadow);
+    }}
+    .eyebrow {{ margin: 0; text-transform: uppercase; letter-spacing: 0.18em; font-size: 11px; font-weight: 700; color: var(--accent-soft); }}
+    .mast h1 {{ margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: clamp(34px, 5vw, 58px); line-height: 0.98; letter-spacing: -0.04em; max-width: 13ch; }}
+    .deck {{ margin: 0; max-width: 74ch; font-size: 15px; line-height: 1.8; color: var(--muted); }}
+    .hero-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }}
+    .hero-card {{ background: rgba(255,255,255,0.58); border: 1px solid var(--border); border-radius: 18px; padding: 16px 18px; min-height: 122px; }}
+    .hero-label {{ display: block; margin-bottom: 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--accent-soft); font-weight: 700; }}
+    .hero-card strong {{ display: block; margin-bottom: 8px; font-size: 22px; font-weight: 700; color: var(--ink); }}
+    .hero-card p {{ margin: 0; font-size: 13px; line-height: 1.65; color: var(--muted); }}
+    .nav {{ position: sticky; top: 10px; z-index: 30; display: flex; gap: 10px; flex-wrap: wrap; padding: 14px 16px; margin: 18px 0 22px; border: 1px solid var(--border); border-radius: 999px; background: rgba(255,253,248,0.84); backdrop-filter: blur(14px); box-shadow: 0 10px 34px rgba(22, 32, 51, 0.08); }}
+    .nav a {{ display: inline-flex; align-items: center; padding: 10px 14px; border-radius: 999px; font-size: 12px; font-weight: 700; text-decoration: none; letter-spacing: 0.08em; text-transform: uppercase; color: #5d6978; }}
+    .nav a:hover, .nav a.is-active {{ background: var(--accent); color: #fffaf2; }}
+    .section {{ margin-bottom: 24px; padding: 22px; border: 1px solid var(--border); border-radius: 24px; background: linear-gradient(180deg, rgba(255,253,248,0.92), rgba(247,241,232,0.96)); box-shadow: 0 20px 50px rgba(22, 32, 51, 0.06); }}
+    .section-head {{ display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; margin-bottom: 16px; flex-wrap: wrap; }}
+    .section-kicker {{ margin: 0 0 8px; text-transform: uppercase; letter-spacing: 0.16em; font-size: 11px; color: var(--accent-soft); font-weight: 700; }}
+    .section h2 {{ margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: clamp(24px, 3vw, 34px); line-height: 1.04; letter-spacing: -0.03em; }}
+    .section p {{ margin: 0; color: #5d6978; font-size: 14px; line-height: 1.78; max-width: 76ch; }}
+    .chip-row {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }}
+    .chip {{ display: inline-flex; align-items: center; padding: 8px 12px; border-radius: 999px; background: var(--surface-soft); border: 1px solid var(--border); color: #5d6978; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; }}
+    .dark-card {{ border-radius: 20px; overflow: hidden; background: linear-gradient(180deg, rgba(255,253,248,0.96), rgba(247,241,232,0.98)); border: 1px solid var(--border); padding: 14px; }}
+    .tab-bar {{ display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }}
+    .tab-button {{ appearance: none; border: 1px solid var(--border); background: var(--surface-soft); color: #5d6978; border-radius: 999px; padding: 10px 14px; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; }}
+    .tab-button.is-active {{ background: var(--accent); border-color: var(--accent); color: #fffaf2; }}
+    .tab-panel {{ display: none; }}
+    .tab-panel.is-active {{ display: block; }}
+    .tab-shell .plotly-graph-div {{ border-radius: 16px; overflow: hidden; }}
+    .empty-copy {{ margin: 0; color: #5d6978; font-size: 14px; }}
+    @media (max-width: 1080px) {{ .hero-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+    @media (max-width: 820px) {{ .shell {{ padding: 18px 14px 32px; }} .mast {{ padding: 22px 18px; }} .hero-grid {{ grid-template-columns: 1fr; }} .nav {{ border-radius: 24px; }} .section {{ padding: 16px; }} }}
   </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>Regime-Switching Backtest Report</h1>
-  <p class="sub">
-    Best strategy selected per market regime via OOS conditional attribution.<br>
-    Score&nbsp;=&nbsp;ann_return&nbsp;&times;&nbsp;sharpe&nbsp;&times;&nbsp;sample_confidence
-    &nbsp;(avoids Calmar inflation from sparse trading in a regime bucket).
+<main class="shell">
+  <header class="mast" id="overview">
+    <p class="eyebrow">Editorial Swiss / Product-Grade Interactivity</p>
+    <h1>Auto Generated Strategy Routing Backtest</h1>
+    <p class="deck">
+    OOS backtest: for each market regime segment the best-scoring strategy is selected
+    using the composite × RSI × VIX multi-dimensional decision tree.<br>
+    Score&nbsp;=&nbsp;ann_return&nbsp;&times;&nbsp;(1&nbsp;+&nbsp;0.10&nbsp;&times;&nbsp;years_in_regime)
+    &nbsp;·&nbsp; Filters: max_dd &gt; −8% &nbsp;·&nbsp; |max_dd| ≤ ann_return / 2
+    &nbsp;·&nbsp; n ≥ 63 bars
   </p>
 
-  <h2>Regime Colour Key</h2>
-  <div style="margin-bottom:20px;">{legend_items}</div>
+    <div class="hero-grid">{hero_cards_html}</div>
+  </header>
 
-  <h2>1 \u2014 Routing Table</h2>
+  <nav class="nav" aria-label="Report sections">
+    <a href="#overview" class="is-active">Overview</a>
+    <a href="#routing">Routing</a>
+    <a href="#timeline">Timeline</a>
+    <a href="#equity">Equity</a>
+    <a href="#metrics">Metrics</a>
+  </nav>
+
+  <section class="section" id="routing">
+    <div class="section-head">
+      <div>
+        <p class="section-kicker">Decision Surfaces</p>
+        <h2>Composite, RSI, and VIX Routing Tables</h2>
+        <p>The composite table remains the explicit fallback map, while the RSI and VIX tables show the secondary score layers that shape the final runtime choice when those states are present.</p>
+      </div>
+      <div class="chip-row">
+        <span class="chip">Score model preserved</span>
+        <span class="chip">Hard filters preserved</span>
+        <span class="chip">Fallback preserved</span>
+      </div>
+    </div>
+    <div class="dark-card">
+  <h2>Regime Colour Key</h2>
+  <div style="margin-bottom:24px;">{legend_items}</div>
+
+  <h2>1 — Composite Routing Table</h2>
   {routing_table_html}
 
-  <h2>2 \u2014 Per-Symbol Equity Curves</h2>
-  {equity_plots_html}
+  <h2>2 — RSI Regime Routing</h2>
+  {rsi_table_html}
 
-  <h2>3 \u2014 Metrics Summary</h2>
+  <h2>3 — VIX Regime Routing</h2>
+  {vix_table_html}
+    </div>
+  </section>
+
+  <section class="section" id="timeline">
+    <div class="section-head">
+      <div>
+        <p class="section-kicker">Context Strip</p>
+        <h2>Regime Timeline</h2>
+        <p>This timeline compresses the state machine the router actually saw through the out-of-sample period, making it easier to relate market-state changes to equity inflections and forced exits.</p>
+      </div>
+    </div>
+    <div class="dark-card">
+
+  <h2>4 — Regime Timeline</h2>
+  {timeline_html}
+    </div>
+  </section>
+
+  <section class="section" id="equity">
+    <div class="section-head">
+      <div>
+        <p class="section-kicker">Execution Review</p>
+        <h2>Per-Symbol Equity Curves</h2>
+        <p>Each symbol keeps its full routing evidence: benchmark comparison, regime bands, trade markers, carry-in exposure markers, and regime-switch exits. Tabs reduce vertical noise without removing any original detail.</p>
+      </div>
+      <div class="chip-row">
+        <span class="chip">Trade markers intact</span>
+        <span class="chip">Carry-in exposure flagged</span>
+        <span class="chip">Shared-x regime strips</span>
+        <span class="chip">Forced exits intact</span>
+        <span class="chip">Benchmark intact</span>
+      </div>
+    </div>
+    <div class="dark-card">
+
+  {equity_plots_html}
+    </div>
+  </section>
+
+  <section class="section" id="metrics">
+    <div class="section-head">
+      <div>
+        <p class="section-kicker">Performance Summary</p>
+        <h2>Metrics Table</h2>
+        <p>The closing table keeps the original routed metrics so the routing design can be judged as an investment process, not just a visual story.</p>
+      </div>
+    </div>
+    <div class="dark-card">
+
+  <h2>6 — Metrics Summary</h2>
   {metrics_table_html}
-</div>
+    </div>
+  </section>
+</main>
+<script>
+  document.addEventListener('DOMContentLoaded', function () {{
+    const links = Array.from(document.querySelectorAll('.nav a'));
+    const sections = links.map((link) => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+    const observer = new IntersectionObserver((entries) => {{
+      entries.forEach((entry) => {{
+        if (!entry.isIntersecting) return;
+        const id = '#' + entry.target.id;
+        links.forEach((link) => link.classList.toggle('is-active', link.getAttribute('href') === id));
+      }});
+    }}, {{ rootMargin: '-35% 0px -50% 0px', threshold: 0.1 }});
+    sections.forEach((section) => observer.observe(section));
+
+    const buttons = Array.from(document.querySelectorAll('.tab-button'));
+    const panels = Array.from(document.querySelectorAll('.tab-panel'));
+    const resizeVisible = () => {{
+      const activePlots = document.querySelectorAll('.tab-panel.is-active .js-plotly-plot');
+      activePlots.forEach((plot) => {{
+        if (window.Plotly) window.Plotly.Plots.resize(plot);
+      }});
+    }};
+    buttons.forEach((button) => {{
+      button.addEventListener('click', () => {{
+        const target = button.getAttribute('data-tab-target');
+        buttons.forEach((item) => item.classList.toggle('is-active', item === button));
+        panels.forEach((panel) => panel.classList.toggle('is-active', panel.id === target));
+        window.requestAnimationFrame(resizeVisible);
+      }});
+    }});
+    window.requestAnimationFrame(resizeVisible);
+  }});
+</script>
 </body>
 </html>
 """
