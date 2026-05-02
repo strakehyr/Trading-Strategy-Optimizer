@@ -3250,38 +3250,54 @@ def create_auto_generated_strategy_routing_report(
                     'segment_carry_in_label',
                     pd.Series(index=_carry.index, dtype=object),
                 ).fillna(_carry['_carry_direction'].map({
-                    'long': 'Already LONG at segment start',
-                    'short': 'Already SHORT at segment start',
-                    'exposure': 'Carry-in exposure at segment start',
+                    'long': 'Adopt LONG state at regime handoff',
+                    'short': 'Adopt SHORT state at regime handoff',
+                    'exposure': 'Adopt existing strategy state at regime handoff',
                 }))
+                _carry['_carry_combo'] = _carry.get(
+                    'strategy_combo',
+                    pd.Series(index=_carry.index, dtype=object),
+                ).fillna('unknown')
+                _carry['_carry_short_combo'] = _carry['_carry_combo'].map(_short_label)
+                _carry['_carry_color'] = _carry['_carry_combo'].map(
+                    lambda c: _combo_color_map.get(c, '#315a7c')
+                )
                 carry_specs = {
-                    'long': ('Carry-In Long Exposure', 'circle-open', '#163a5c', 1.014),
-                    'short': ('Carry-In Short Exposure', 'square-open', '#8e3e2f', 0.986),
-                    'exposure': ('Carry-In Exposure', 'circle-open', '#163a5c', 1.014),
+                    'long': ('Adopt Long State', 1.012),
+                    'short': ('Adopt Short State', 0.988),
+                    'exposure': ('Adopt Strategy State', 1.012),
                 }
-                for _direction, (_name, _symbol, _color, _mult) in carry_specs.items():
+                for _direction, (_name, _mult) in carry_specs.items():
                     _carry_dir = _carry[_carry['_carry_direction'] == _direction]
                     if _carry_dir.empty:
                         continue
+                    _custom = np.column_stack([
+                        _carry_dir['total_value'].astype(float),
+                        _carry_dir['_carry_combo'].astype(str),
+                        _carry_dir['_carry_short_combo'].astype(str),
+                    ])
                     fig.add_trace(go.Scatter(
                         x=_carry_dir.index,
                         y=_carry_dir['total_value'] * _mult,
-                        customdata=_carry_dir['total_value'],
+                        customdata=_custom,
                         text=_carry_dir['_carry_label'],
                         mode='markers',
                         name=_name,
                         marker=dict(
-                            symbol=_symbol,
-                            size=12,
-                            color=_color,
-                            line=dict(color=_color, width=2),
+                            symbol='line-ns',
+                            size=14,
+                            color=_carry_dir['_carry_color'],
+                            opacity=0.82,
+                            line=dict(color=_carry_dir['_carry_color'], width=2),
                         ),
                         hovertemplate=(
                             '<b>%{text}</b><br>'
                             '%{x|%Y-%m-%d}<br>'
-                            'The position was already open when this routed regime segment began; '
-                            'entry occurred before the visible segment.<br>'
-                            'Portfolio: $%{customdata:,.0f}<extra></extra>'
+                            'Adopted strategy: %{customdata[1]}<br>'
+                            'Display label: %{customdata[2]}<br>'
+                            'Router action: sync to that strategy state at the boundary.<br>'
+                            'This is not a fresh triangle entry signal.<br>'
+                            'Portfolio: $%{customdata[0]:,.0f}<extra></extra>'
                         ),
                     ), row=1, col=1)
 
@@ -3314,6 +3330,7 @@ def create_auto_generated_strategy_routing_report(
                             hovertemplate=(
                                 f'<b>BUY</b> · {_label}<br>'
                                 f'%{{x|%Y-%m-%d}}<br>'
+                                f'Strategy: {_combo}<br>'
                                 f'Portfolio: $%{{y:,.0f}}<extra></extra>'
                             ),
                         ), row=1, col=1)
@@ -3337,6 +3354,7 @@ def create_auto_generated_strategy_routing_report(
                             hovertemplate=(
                                 f'<b>SHORT</b> · {_label}<br>'
                                 f'%{{x|%Y-%m-%d}}<br>'
+                                f'Strategy: {_combo}<br>'
                                 f'Portfolio: $%{{y:,.0f}}<extra></extra>'
                             ),
                         ), row=1, col=1)
@@ -3360,6 +3378,7 @@ def create_auto_generated_strategy_routing_report(
                             hovertemplate=(
                                 f'<b>EXIT</b> · {_label}<br>'
                                 f'%{{x|%Y-%m-%d}}<br>'
+                                f'Strategy: {_combo}<br>'
                                 f'Portfolio: $%{{y:,.0f}}<extra></extra>'
                             ),
                         ), row=1, col=1)
@@ -3374,7 +3393,7 @@ def create_auto_generated_strategy_routing_report(
                     _hover = [
                         f'<b>⚡ REGIME SWITCH EXIT</b><br>'
                         f'{str(idx)[:10]}<br>'
-                        f'Active strategy: {c}<br>'
+                        f'Closed adopted strategy: {c}<br>'
                         f'Portfolio: ${v:,.0f}'
                         f'<extra></extra>'
                         for idx, v, c in zip(_rsx.index, _rsx['total_value'], _rsx_combo)
@@ -3848,11 +3867,11 @@ def create_auto_generated_strategy_routing_report(
       <div>
         <p class="section-kicker">Execution Review</p>
         <h2>Per-Symbol Equity Curves</h2>
-        <p>Each symbol keeps its full routing evidence: benchmark comparison, regime bands, trade markers, carry-in exposure markers, and regime-switch exits. Tabs reduce vertical noise without removing any original detail.</p>
+        <p>Each symbol keeps its full routing evidence: benchmark comparison, regime bands, trade markers, strategy-state handoffs, and regime-switch exits. Tabs reduce vertical noise without removing any original detail.</p>
       </div>
       <div class="chip-row">
         <span class="chip">Trade markers intact</span>
-        <span class="chip">Carry-in exposure flagged</span>
+        <span class="chip">Adopted state marked</span>
         <span class="chip">Shared-x regime strips</span>
         <span class="chip">Forced exits intact</span>
         <span class="chip">Benchmark intact</span>

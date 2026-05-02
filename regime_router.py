@@ -495,9 +495,9 @@ def run_regime_switching_backtest(
                 direction = 'long' if float(seg['shares'].iloc[0]) > 0 else 'short'
                 seg.loc[seg.index[0], 'segment_carry_in'] = direction
                 seg.loc[seg.index[0], 'segment_carry_in_label'] = (
-                    'Already LONG at segment start'
+                    'Adopt LONG state at regime handoff'
                     if direction == 'long'
-                    else 'Already SHORT at segment start'
+                    else 'Adopt SHORT state at regime handoff'
                 )
 
         # Detect regime-switch forced exit: if the last bar still carries an open
