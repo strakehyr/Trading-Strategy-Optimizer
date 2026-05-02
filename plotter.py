@@ -2974,6 +2974,12 @@ _VIX_REGIME_COLORS = {
     'vix_high':     {'bg': '#e8c1bb', 'text': '#8e3e2f', 'label': 'VIX High'},
 }
 
+_POSITION_COLORS = {
+    'long':  {'bg': '#c9e4d6', 'text': '#0f6a56', 'label': 'Long exposure', 'line_opacity': 0.58},
+    'short': {'bg': '#e8c1bb', 'text': '#8e3e2f', 'label': 'Short exposure', 'line_opacity': 0.58},
+    'flat':  {'bg': '#ece7dd', 'text': '#667085', 'label': 'Flat / cash', 'line_opacity': 0.42},
+}
+
 
 def _regime_segments(series: pd.Series) -> list:
     """Return list of (start, end, regime) from a smoothed regime series."""
@@ -3166,7 +3172,7 @@ def create_auto_generated_strategy_routing_report(
                 y=[0.5, 0.5],
                 mode='lines',
                 line=dict(color=meta.get('text', '#667085'), width=8),
-                opacity=0.32,
+                opacity=meta.get('line_opacity', 0.32),
                 hovertemplate=(
                     f'<b>{meta.get("label", regime)}</b><br>'
                     f'{seg_start:%Y-%m-%d} to {seg_end:%Y-%m-%d}<extra></extra>'
@@ -3184,13 +3190,32 @@ def create_auto_generated_strategy_routing_report(
 
         strip_rows = []
         if not regime_series.empty:
-            strip_rows.append(('Composite', regime_series, _REGIME_COLORS_DARK))
+            strip_rows.append(('Composite', regime_series, _REGIME_COLORS_DARK, 0.62))
         rsi_window = _window_series(rsi_series, equity_df.index)
         vix_window = _window_series(vix_series, equity_df.index)
         if not rsi_window.empty:
-            strip_rows.append(('RSI', rsi_window, _RSI_REGIME_COLORS))
+            strip_rows.append(('RSI', rsi_window, _RSI_REGIME_COLORS, 0.62))
         if not vix_window.empty:
-            strip_rows.append(('VIX', vix_window, _VIX_REGIME_COLORS))
+            strip_rows.append(('VIX', vix_window, _VIX_REGIME_COLORS, 0.62))
+        if 'strategy_combo' in equity_df.columns:
+            strategy_series = equity_df['strategy_combo'].fillna('Unrouted / cash').astype(object)
+            strategy_palette = {
+                str(combo): {
+                    'bg': _combo_color_map.get(str(combo), '#94a3b8'),
+                    'text': _combo_color_map.get(str(combo), '#315a7c'),
+                    'label': _short_label(str(combo)),
+                    'line_opacity': 0.78,
+                }
+                for combo in strategy_series.dropna().unique()
+            }
+            strip_rows.append(('Strategy', strategy_series, strategy_palette, 0.28))
+        if 'shares' in equity_df.columns:
+            position_series = equity_df['shares'].map(
+                lambda v: 'long' if pd.notna(v) and float(v) > 1e-9
+                else 'short' if pd.notna(v) and float(v) < -1e-9
+                else 'flat'
+            )
+            strip_rows.append(('Position', position_series, _POSITION_COLORS, 0.68))
 
         total_rows = 1 + len(strip_rows)
         fig = make_subplots(
@@ -3198,7 +3223,7 @@ def create_auto_generated_strategy_routing_report(
             cols=1,
             shared_xaxes=True,
             vertical_spacing=0.02,
-            row_heights=[0.78] + [0.075] * len(strip_rows),
+            row_heights=[0.72] + [0.07] * len(strip_rows),
         )
 
         # Regime background bands use low-contrast tints so signals remain legible.
@@ -3231,76 +3256,8 @@ def create_auto_generated_strategy_routing_report(
             ), row=1, col=1)
 
         # ── Buy / Sell / Exit signal arrows, coloured per active strategy ──
-        if 'segment_carry_in' in equity_df.columns:
-            _carry = equity_df[equity_df['segment_carry_in'].notna()]
-            if not _carry.empty:
-                _carry = _carry.copy()
-
-                def _carry_direction(row: pd.Series) -> str:
-                    raw = str(row.get('segment_carry_in', '')).lower()
-                    if raw in ('long', 'short'):
-                        return raw
-                    shares = row.get('shares', np.nan)
-                    if pd.notna(shares) and abs(float(shares)) > 1e-9:
-                        return 'long' if float(shares) > 0 else 'short'
-                    return 'exposure'
-
-                _carry['_carry_direction'] = _carry.apply(_carry_direction, axis=1)
-                _carry['_carry_label'] = _carry.get(
-                    'segment_carry_in_label',
-                    pd.Series(index=_carry.index, dtype=object),
-                ).fillna(_carry['_carry_direction'].map({
-                    'long': 'Adopt LONG state at regime handoff',
-                    'short': 'Adopt SHORT state at regime handoff',
-                    'exposure': 'Adopt existing strategy state at regime handoff',
-                }))
-                _carry['_carry_combo'] = _carry.get(
-                    'strategy_combo',
-                    pd.Series(index=_carry.index, dtype=object),
-                ).fillna('unknown')
-                _carry['_carry_short_combo'] = _carry['_carry_combo'].map(_short_label)
-                _carry['_carry_color'] = _carry['_carry_combo'].map(
-                    lambda c: _combo_color_map.get(c, '#315a7c')
-                )
-                carry_specs = {
-                    'long': ('Adopt Long State', 1.012),
-                    'short': ('Adopt Short State', 0.988),
-                    'exposure': ('Adopt Strategy State', 1.012),
-                }
-                for _direction, (_name, _mult) in carry_specs.items():
-                    _carry_dir = _carry[_carry['_carry_direction'] == _direction]
-                    if _carry_dir.empty:
-                        continue
-                    _custom = np.column_stack([
-                        _carry_dir['total_value'].astype(float),
-                        _carry_dir['_carry_combo'].astype(str),
-                        _carry_dir['_carry_short_combo'].astype(str),
-                    ])
-                    fig.add_trace(go.Scatter(
-                        x=_carry_dir.index,
-                        y=_carry_dir['total_value'] * _mult,
-                        customdata=_custom,
-                        text=_carry_dir['_carry_label'],
-                        mode='markers',
-                        name=_name,
-                        marker=dict(
-                            symbol='line-ns',
-                            size=14,
-                            color=_carry_dir['_carry_color'],
-                            opacity=0.82,
-                            line=dict(color=_carry_dir['_carry_color'], width=2),
-                        ),
-                        hovertemplate=(
-                            '<b>%{text}</b><br>'
-                            '%{x|%Y-%m-%d}<br>'
-                            'Adopted strategy: %{customdata[1]}<br>'
-                            'Display label: %{customdata[2]}<br>'
-                            'Router action: sync to that strategy state at the boundary.<br>'
-                            'This is not a fresh triangle entry signal.<br>'
-                            'Portfolio: $%{customdata[0]:,.0f}<extra></extra>'
-                        ),
-                    ), row=1, col=1)
-
+        # Main-chart markers are reserved for executable trade actions.
+        # Handoffs and current exposure are shown in the shared-x strips below.
         has_signals = 'strategy_combo' in equity_df.columns and \
                       any(c in equity_df.columns for c in
                           ('long_entry_marker', 'short_entry_marker', 'exit_marker'))
@@ -3391,9 +3348,10 @@ def create_auto_generated_strategy_routing_report(
                     # Annotate with which combo was active when regime switched
                     _rsx_combo = _rsx['strategy_combo'] if 'strategy_combo' in _rsx.columns else [''] * len(_rsx)
                     _hover = [
-                        f'<b>⚡ REGIME SWITCH EXIT</b><br>'
+                        f'<b>COMPOSITE BOUNDARY EXIT</b><br>'
                         f'{str(idx)[:10]}<br>'
                         f'Closed adopted strategy: {c}<br>'
+                        f'Trigger: composite regime segment boundary<br>'
                         f'Portfolio: ${v:,.0f}'
                         f'<extra></extra>'
                         for idx, v, c in zip(_rsx.index, _rsx['total_value'], _rsx_combo)
@@ -3402,7 +3360,7 @@ def create_auto_generated_strategy_routing_report(
                         x=_rsx.index,
                         y=_rsx['total_value'] * 0.974,
                         mode='markers',
-                        name='Regime Switch Exit',
+                        name='Composite Boundary Exit',
                         legendgroup='regime_switch_exit',
                         showlegend=True,
                         marker=dict(
@@ -3413,8 +3371,8 @@ def create_auto_generated_strategy_routing_report(
                         hovertemplate=_hover,
                     ), row=1, col=1)
 
-        for strip_row, (strip_label, strip_series, strip_palette) in enumerate(strip_rows, start=2):
-            _add_regime_strip(fig, strip_series, strip_row, strip_palette, opacity=0.62)
+        for strip_row, (strip_label, strip_series, strip_palette, strip_opacity) in enumerate(strip_rows, start=2):
+            _add_regime_strip(fig, strip_series, strip_row, strip_palette, opacity=strip_opacity)
             fig.update_yaxes(
                 title=dict(text=strip_label, font=dict(color='#315a7c', size=10)),
                 showticklabels=False,
@@ -3710,7 +3668,7 @@ def create_auto_generated_strategy_routing_report(
     <article class="hero-card">
       <span class="hero-label">Runtime Inputs</span>
       <strong>{'Composite + RSI + VIX' if vix_series is not None and not vix_series.empty else 'Composite + RSI'}</strong>
-      <p>The live decision engine still sums scores across the same active dimensions as before.</p>
+      <p>The router scores the active dimensions, then holds the selected strategy through each composite segment.</p>
     </article>
     <article class="hero-card">
       <span class="hero-label">Fallback Strategy</span>
@@ -3814,7 +3772,6 @@ def create_auto_generated_strategy_routing_report(
   <nav class="nav" aria-label="Report sections">
     <a href="#overview" class="is-active">Overview</a>
     <a href="#routing">Routing</a>
-    <a href="#timeline">Timeline</a>
     <a href="#equity">Equity</a>
     <a href="#metrics">Metrics</a>
   </nav>
@@ -3847,33 +3804,18 @@ def create_auto_generated_strategy_routing_report(
     </div>
   </section>
 
-  <section class="section" id="timeline">
-    <div class="section-head">
-      <div>
-        <p class="section-kicker">Context Strip</p>
-        <h2>Regime Timeline</h2>
-        <p>This timeline compresses the state machine the router actually saw through the out-of-sample period, making it easier to relate market-state changes to equity inflections and forced exits.</p>
-      </div>
-    </div>
-    <div class="dark-card">
-
-  <h2>4 — Regime Timeline</h2>
-  {timeline_html}
-    </div>
-  </section>
-
   <section class="section" id="equity">
     <div class="section-head">
       <div>
         <p class="section-kicker">Execution Review</p>
         <h2>Per-Symbol Equity Curves</h2>
-        <p>Each symbol keeps its full routing evidence: benchmark comparison, regime bands, trade markers, strategy-state handoffs, and regime-switch exits. Tabs reduce vertical noise without removing any original detail.</p>
+        <p>Each symbol keeps its full routing evidence: benchmark comparison, true trade markers, composite/RSI/VIX context, active strategy, position exposure, and composite-boundary exits. Tabs reduce vertical noise without removing any original detail.</p>
       </div>
       <div class="chip-row">
         <span class="chip">Trade markers intact</span>
-        <span class="chip">Adopted state marked</span>
-        <span class="chip">Shared-x regime strips</span>
-        <span class="chip">Forced exits intact</span>
+        <span class="chip">Strategy strip added</span>
+        <span class="chip">Position strip added</span>
+        <span class="chip">Boundary exits labelled</span>
         <span class="chip">Benchmark intact</span>
       </div>
     </div>
@@ -3893,7 +3835,7 @@ def create_auto_generated_strategy_routing_report(
     </div>
     <div class="dark-card">
 
-  <h2>6 — Metrics Summary</h2>
+  <h2>Metrics Summary</h2>
   {metrics_table_html}
     </div>
   </section>
