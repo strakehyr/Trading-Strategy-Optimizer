@@ -3347,20 +3347,37 @@ def create_auto_generated_strategy_routing_report(
                 if not _rsx.empty:
                     # Annotate with which combo was active when regime switched
                     _rsx_combo = _rsx['strategy_combo'] if 'strategy_combo' in _rsx.columns else [''] * len(_rsx)
+                    _rsx_reason = (
+                        _rsx['regime_switch_exit_reason']
+                        if 'regime_switch_exit_reason' in _rsx.columns
+                        else pd.Series('Routing selector boundary', index=_rsx.index)
+                    )
+                    _rsx_conditions = (
+                        _rsx['routing_conditions']
+                        if 'routing_conditions' in _rsx.columns
+                        else pd.Series('', index=_rsx.index)
+                    )
                     _hover = [
-                        f'<b>COMPOSITE BOUNDARY EXIT</b><br>'
+                        f'<b>ROUTING BOUNDARY EXIT</b><br>'
                         f'{str(idx)[:10]}<br>'
                         f'Closed adopted strategy: {c}<br>'
-                        f'Trigger: composite regime segment boundary<br>'
+                        f'Trigger: {reason}<br>'
+                        f'Conditions: {conditions}<br>'
                         f'Portfolio: ${v:,.0f}'
                         f'<extra></extra>'
-                        for idx, v, c in zip(_rsx.index, _rsx['total_value'], _rsx_combo)
+                        for idx, v, c, reason, conditions in zip(
+                            _rsx.index,
+                            _rsx['total_value'],
+                            _rsx_combo,
+                            _rsx_reason,
+                            _rsx_conditions,
+                        )
                     ]
                     fig.add_trace(go.Scatter(
                         x=_rsx.index,
                         y=_rsx['total_value'] * 0.974,
                         mode='markers',
-                        name='Composite Boundary Exit',
+                        name='Routing Boundary Exit',
                         legendgroup='regime_switch_exit',
                         showlegend=True,
                         marker=dict(
@@ -3668,7 +3685,7 @@ def create_auto_generated_strategy_routing_report(
     <article class="hero-card">
       <span class="hero-label">Runtime Inputs</span>
       <strong>{'Composite + RSI + VIX' if vix_series is not None and not vix_series.empty else 'Composite + RSI'}</strong>
-      <p>The router scores the active dimensions, then holds the selected strategy through each composite segment.</p>
+      <p>The router scores the current dimensions at each bar and switches when the selected strategy changes.</p>
     </article>
     <article class="hero-card">
       <span class="hero-label">Fallback Strategy</span>
@@ -3809,13 +3826,13 @@ def create_auto_generated_strategy_routing_report(
       <div>
         <p class="section-kicker">Execution Review</p>
         <h2>Per-Symbol Equity Curves</h2>
-        <p>Each symbol keeps its full routing evidence: benchmark comparison, true trade markers, composite/RSI/VIX context, active strategy, position exposure, and composite-boundary exits. Tabs reduce vertical noise without removing any original detail.</p>
+        <p>Each symbol keeps its full routing evidence: benchmark comparison, true trade markers, composite/RSI/VIX context, active strategy, position exposure, and routing-boundary exits. Tabs reduce vertical noise without removing any original detail.</p>
       </div>
       <div class="chip-row">
         <span class="chip">Trade markers intact</span>
         <span class="chip">Strategy strip added</span>
         <span class="chip">Position strip added</span>
-        <span class="chip">Boundary exits labelled</span>
+        <span class="chip">Routing exits labelled</span>
         <span class="chip">Benchmark intact</span>
       </div>
     </div>

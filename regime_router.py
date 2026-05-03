@@ -14,8 +14,9 @@ Closes the end-to-end loop of the framework:
   3. Saves a human-readable JSON routing table.
   4. Runs a regime-switching OOS backtest per symbol:
        - market regime is re-evaluated daily on a reference equity curve
-       - a persistence filter (default 3 days) prevents rapid whipsawing
-       - each contiguous same-regime segment runs its assigned strategy
+       - a persistence filter (default 3 days) prevents rapid composite whipsawing
+       - the Activation Guide selector is evaluated on every OOS bar
+       - each contiguous same-selected-strategy segment runs its assigned strategy
          on the full prior history (so all indicator lookbacks are warm),
          then the segment equity curve is scaled and chained to the
          running capital from the previous segment
@@ -161,6 +162,141 @@ def _get_segments(smoothed: pd.Series) -> List[Tuple]:
             start = smoothed.index[i]
     segs.append((start, smoothed.index[-1], current))
     return segs
+
+
+def _is_live_bucket(value: Any) -> bool:
+    if value is None or pd.isna(value):
+        return False
+    return str(value) not in ('unknown', 'unavailable', '')
+
+
+def _select_combo_for_state(
+    composite: Any,
+    rsi: Any,
+    vix: Any,
+    routing_table: Dict,
+) -> Tuple[Dict, float, List[str]]:
+    """
+    Mirror the Activation Guide selector: score every strategy against the
+    current composite + RSI + VIX state and return the highest summed score.
+    """
+    combo_scores = routing_table.get('combo_scores', {})
+    combos_meta = routing_table.get('combos_meta', {})
+    default = routing_table.get('default', {})
+
+    conditions: List[str] = []
+    if _is_live_bucket(composite):
+        conditions.append(str(composite))
+    if _is_live_bucket(rsi):
+        conditions.append(str(rsi))
+    if _is_live_bucket(vix):
+        conditions.append(str(vix))
+
+    best_name = default.get('combo')
+    best_score = 0.0
+    for combo, bucket_scores in combo_scores.items():
+        score = float(sum(bucket_scores.get(c, 0.0) for c in conditions))
+        if score > best_score:
+            best_score = score
+            best_name = combo
+
+    if best_name and best_name in combos_meta:
+        return combos_meta[best_name], best_score, conditions
+    if best_name == default.get('combo') and default:
+        return default, best_score, conditions
+    return {}, best_score, conditions
+
+
+def _decision_change_reason(prev_row: pd.Series, cur_row: pd.Series) -> str:
+    changed: List[str] = []
+    for col, label in (
+        ('composite_regime', 'Composite'),
+        ('rsi_regime', 'RSI'),
+        ('vix_regime', 'VIX'),
+    ):
+        if str(prev_row.get(col, '')) != str(cur_row.get(col, '')):
+            changed.append(label)
+    return ' + '.join(changed) + ' selector change' if changed else 'Routing selector change'
+
+
+def _build_routing_decisions(
+    df_oos: pd.DataFrame,
+    regime_series: pd.Series,
+    rsi_series: Optional[pd.Series],
+    vix_series: Optional[pd.Series],
+    routing_table: Dict,
+) -> pd.DataFrame:
+    """Build the per-bar strategy selector that the routing backtest executes."""
+    if df_oos.empty:
+        return pd.DataFrame()
+
+    index = df_oos.index
+    decisions = pd.DataFrame(index=index)
+    decisions['composite_regime'] = regime_series.reindex(index).ffill().bfill()
+    decisions['rsi_regime'] = (
+        rsi_series.reindex(index).ffill().bfill()
+        if rsi_series is not None and not rsi_series.empty
+        else 'unavailable'
+    )
+    decisions['vix_regime'] = (
+        vix_series.reindex(index).ffill().bfill()
+        if vix_series is not None and not vix_series.empty
+        else 'unavailable'
+    )
+
+    rows: List[Dict] = []
+    for _, row in decisions.iterrows():
+        combo_info, score, conditions = _select_combo_for_state(
+            row.get('composite_regime'),
+            row.get('rsi_regime'),
+            row.get('vix_regime'),
+            routing_table,
+        )
+        rows.append({
+            'strategy_combo': combo_info.get('combo', combo_info.get('strategy', 'unknown')),
+            'routing_score': score,
+            'routing_conditions': ' + '.join(conditions),
+        })
+
+    selected = pd.DataFrame(rows, index=index)
+    decisions = pd.concat([decisions, selected], axis=1)
+    decisions = decisions[decisions['strategy_combo'].notna()]
+    decisions = decisions[decisions['strategy_combo'] != 'unknown']
+    return decisions
+
+
+def _get_decision_segments(decisions: pd.DataFrame) -> List[Dict]:
+    """Convert per-bar strategy decisions into contiguous selected-strategy segments."""
+    segments: List[Dict] = []
+    if decisions.empty:
+        return segments
+
+    current_combo = decisions['strategy_combo'].iloc[0]
+    start_pos = 0
+    for i in range(1, len(decisions)):
+        if decisions['strategy_combo'].iloc[i] != current_combo:
+            prev_row = decisions.iloc[i - 1]
+            cur_row = decisions.iloc[i]
+            segments.append({
+                'start': decisions.index[start_pos],
+                'end': decisions.index[i - 1],
+                'combo': current_combo,
+                'start_state': decisions.iloc[start_pos],
+                'end_state': prev_row,
+                'next_change_reason': _decision_change_reason(prev_row, cur_row),
+            })
+            start_pos = i
+            current_combo = decisions['strategy_combo'].iloc[i]
+
+    segments.append({
+        'start': decisions.index[start_pos],
+        'end': decisions.index[-1],
+        'combo': current_combo,
+        'start_state': decisions.iloc[start_pos],
+        'end_state': decisions.iloc[-1],
+        'next_change_reason': 'End of OOS window',
+    })
+    return segments
 
 
 # ---------------------------------------------------------------------------
@@ -388,13 +524,11 @@ def run_regime_switching_backtest(
     initial_capital: float = 100_000.0,
 ) -> Tuple[pd.DataFrame, Dict]:
     """
-    Segments the OOS period by composite regime and selects a strategy for each
-    segment using unified multi-dimensional scoring across composite, RSI, and VIX
-    analyses.  For each segment the strategy with the highest combined score across
-    all current conditions (composite + mode RSI + mode VIX) wins.
+    Evaluates the same composite + RSI + VIX selector shown in the Activation
+    Guide at every OOS timestamp, then switches only when the selected strategy
+    changes.
 
-    Falls back to the per-composite-bucket best if no combo_scores entry exists,
-    then to the global default if even that is missing.
+    Falls back to the global default if no current-state score is available.
 
     The segment equity curves are chained multiplicatively: each segment
     starts at the capital left by the previous one.
@@ -403,46 +537,29 @@ def run_regime_switching_backtest(
     """
     from backtester import run_backtest
 
-    combo_scores = routing_table.get('combo_scores', {})
     combos_meta  = routing_table.get('combos_meta', {})
-    routing      = routing_table.get('routing', {})   # composite fallback
     default      = routing_table.get('default', {})
 
     df_full = pd.concat([df_is, df_oos]).sort_index()
     df_full = df_full[~df_full.index.duplicated(keep='first')]
 
-    segments = _get_segments(regime_series)
+    decisions = _build_routing_decisions(
+        df_oos,
+        regime_series,
+        rsi_series,
+        vix_series,
+        routing_table,
+    )
+    segments = _get_decision_segments(decisions)
     parts: List[pd.DataFrame] = []
     capital = initial_capital
 
-    for seg_start, seg_end, regime in segments:
-        # Build current conditions: composite regime + mode RSI/VIX during segment
-        conditions: List[str] = [str(regime)]
-        if rsi_series is not None:
-            seg_rsi = rsi_series.loc[seg_start:seg_end].dropna()
-            if not seg_rsi.empty:
-                mode_rsi = seg_rsi.mode().iloc[0]
-                if mode_rsi not in ('unknown', 'unavailable'):
-                    conditions.append(mode_rsi)
-        if vix_series is not None:
-            seg_vix = vix_series.loc[seg_start:seg_end].dropna()
-            if not seg_vix.empty:
-                mode_vix = seg_vix.mode().iloc[0]
-                if mode_vix not in ('unknown', 'unavailable'):
-                    conditions.append(mode_vix)
-
-        # Select best combo: highest combined score across all active conditions
-        best_name, best_combined = None, 0.0
-        for _combo, _bucket_scores in combo_scores.items():
-            combined = sum(_bucket_scores.get(c, 0) for c in conditions)
-            if combined > best_combined:
-                best_combined, best_name = combined, _combo
-
-        if best_name and best_name in combos_meta:
-            combo_info = combos_meta[best_name]
-        elif str(regime) in routing:
-            combo_info = routing[str(regime)]   # composite-only fallback
-        else:
+    for seg_meta in segments:
+        seg_start = seg_meta['start']
+        seg_end = seg_meta['end']
+        combo_name = seg_meta['combo']
+        combo_info = combos_meta.get(combo_name)
+        if combo_info is None and combo_name == default.get('combo'):
             combo_info = default
         if not combo_info or not combo_info.get('strategy'):
             # Unknown / unrouted regime → hold cash
@@ -471,7 +588,7 @@ def run_regime_switching_backtest(
                 initial_capital=100_000.0,
             )
         except Exception as e:
-            logger.error("Backtest error for %s [%s]: %s", combo_info.get('combo'), regime, e)
+            logger.error("Backtest error for %s [%s]: %s", combo_info.get('combo'), combo_name, e)
             continue
 
         seg = result_df.loc[seg_start:seg_end].copy()
@@ -480,6 +597,11 @@ def run_regime_switching_backtest(
 
         # Tag which combo was active so the report can colour signals per algo
         seg['strategy_combo'] = combo_info.get('combo', combo_info.get('strategy', 'unknown'))
+        seg['routing_composite'] = seg_meta['start_state'].get('composite_regime', 'unknown')
+        seg['routing_rsi'] = seg_meta['start_state'].get('rsi_regime', 'unavailable')
+        seg['routing_vix'] = seg_meta['start_state'].get('vix_regime', 'unavailable')
+        seg['routing_conditions'] = seg_meta['start_state'].get('routing_conditions', '')
+        seg['routing_score'] = seg_meta['start_state'].get('routing_score', 0.0)
 
         # If the routed slice begins with an already-open position, the visible
         # entry happened before this regime segment. Flag that carry-in exposure
@@ -500,13 +622,19 @@ def run_regime_switching_backtest(
                     else 'Adopt SHORT state at regime handoff'
                 )
 
-        # Detect regime-switch forced exit: if the last bar still carries an open
+        # Detect routing-boundary forced exit: if the last bar still carries an open
         # position (shares != 0), that position is silently dropped when the next
         # segment starts.  Mark the last bar so the plotter can flag it distinctly.
         seg['regime_switch_exit'] = np.nan
+        seg['regime_switch_exit_reason'] = np.nan
         if 'shares' in seg.columns and abs(seg['shares'].iloc[-1]) > 1e-9:
             seg['regime_switch_exit'] = seg['regime_switch_exit'].astype(object)
+            seg['regime_switch_exit_reason'] = seg['regime_switch_exit_reason'].astype(object)
             seg.loc[seg.index[-1], 'regime_switch_exit'] = True
+            seg.loc[seg.index[-1], 'regime_switch_exit_reason'] = seg_meta.get(
+                'next_change_reason',
+                'Routing selector boundary',
+            )
 
         # Chain: scale this segment to start at current running capital
         rel_return = seg['total_value'].iloc[-1] / seg['total_value'].iloc[0]
