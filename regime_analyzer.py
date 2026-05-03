@@ -363,6 +363,24 @@ def analyze(
             else:
                 kw_vix = {'statistic': None, 'p_value': None, 'significant': None, 'n_groups': 0}
 
+            stack_tiers = [
+                ('composite+rsi+vix', ('composite_regime', 'rsi_regime', 'vix_regime')),
+                ('composite+rsi', ('composite_regime', 'rsi_regime')),
+                ('composite+vix', ('composite_regime', 'vix_regime')),
+                ('rsi+vix', ('rsi_regime', 'vix_regime')),
+                ('composite', ('composite_regime',)),
+                ('rsi', ('rsi_regime',)),
+                ('vix', ('vix_regime',)),
+            ]
+            condition_stack_metrics: Dict[str, Dict] = {}
+            for tier_id, cols in stack_tiers:
+                if not all(col in df_p.columns for col in cols):
+                    continue
+                labels = df_p[list(cols)].astype(str).agg('|'.join, axis=1)
+                condition_stack_metrics[tier_id] = _compute_conditional_metrics(
+                    df_p['strategy_return'], labels
+                )
+
             # ------------------------------------------------------------------
             # Coverage: how much time fell in each regime bucket this period.
             # Expressed as: n_bars (raw count), pct (% of period bars), and
@@ -394,6 +412,7 @@ def analyze(
                 'conditional_metrics':  cond_metrics,   # composite rv×sma
                 'rsi_metrics':          rsi_metrics,
                 'vix_metrics':          vix_metrics,
+                'condition_stack_metrics': condition_stack_metrics,
                 'kruskal_wallis':       kw_result,
                 'kruskal_wallis_rsi':   kw_rsi,
                 'kruskal_wallis_vix':   kw_vix,
@@ -511,11 +530,16 @@ def analyze_from_disk(run_dir: str, top_n: int = 15) -> None:
                 ):
                     _try_load_combo(sym_path, f"{sym_dir}_{combo_dir}")
 
-    # Try to load VIX data
+    # Try to load VIX data from the existing cache first; post-hoc report
+    # regeneration should not refresh market data unless the cache is missing.
     vix_df = None
     try:
-        from data_fetcher import get_market_data
-        vix_df = get_market_data('VIX', '1 day', min_data_days=365, contract_type='IND')
+        vix_cache = os.path.join('market_data', 'VIX_1day.csv')
+        if os.path.exists(vix_cache):
+            vix_df = pd.read_csv(vix_cache, parse_dates=['date'], index_col='date')
+        else:
+            from data_fetcher import get_market_data
+            vix_df = get_market_data('VIX', '1 day', min_data_days=365, contract_type='IND')
     except Exception as e:
         logger.warning(f"VIX data not available: {e}")
 

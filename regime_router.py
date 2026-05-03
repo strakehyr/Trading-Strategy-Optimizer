@@ -15,7 +15,7 @@ Closes the end-to-end loop of the framework:
   4. Runs a regime-switching OOS backtest per symbol:
        - market regime is re-evaluated daily on a reference equity curve
        - a persistence filter (default 3 days) prevents rapid composite whipsawing
-       - the Activation Guide selector is evaluated on every OOS bar
+       - the condition-stack selector is evaluated on every OOS bar
        - each contiguous same-selected-strategy segment runs its assigned strategy
          on the full prior history (so all indicator lookbacks are warm),
          then the segment equity curve is scaled and chained to the
@@ -164,10 +164,50 @@ def _get_segments(smoothed: pd.Series) -> List[Tuple]:
     return segs
 
 
+_ROUTING_TIERS: List[Tuple[str, ...]] = [
+    ('composite_regime', 'rsi_regime', 'vix_regime'),
+    ('composite_regime', 'rsi_regime'),
+    ('composite_regime', 'vix_regime'),
+    ('rsi_regime', 'vix_regime'),
+    ('composite_regime',),
+    ('rsi_regime',),
+    ('vix_regime',),
+]
+
+_ROUTING_TIER_LABELS = {
+    'composite_regime': 'Composite',
+    'rsi_regime': 'RSI',
+    'vix_regime': 'VIX',
+}
+
+
 def _is_live_bucket(value: Any) -> bool:
     if value is None or pd.isna(value):
         return False
     return str(value) not in ('unknown', 'unavailable', '')
+
+
+def _tier_id(dims: Tuple[str, ...]) -> str:
+    return '+'.join(d.replace('_regime', '') for d in dims)
+
+
+def _tier_label(dims: Tuple[str, ...]) -> str:
+    return ' + '.join(_ROUTING_TIER_LABELS.get(d, d) for d in dims)
+
+
+def _condition_key_from_values(values: Dict[str, Any], dims: Tuple[str, ...]) -> str:
+    return '|'.join(str(values.get(d, 'unavailable')) for d in dims)
+
+
+def _condition_label_from_values(values: Dict[str, Any], dims: Tuple[str, ...]) -> str:
+    return ' + '.join(
+        f'{_ROUTING_TIER_LABELS.get(d, d)}={values.get(d, "unavailable")}'
+        for d in dims
+    )
+
+
+def _key_has_only_live_buckets(key: str) -> bool:
+    return all(_is_live_bucket(part) for part in key.split('|'))
 
 
 def _select_combo_for_state(
@@ -175,36 +215,96 @@ def _select_combo_for_state(
     rsi: Any,
     vix: Any,
     routing_table: Dict,
-) -> Tuple[Dict, float, List[str]]:
+) -> Tuple[Dict, float, List[str], str]:
     """
-    Mirror the Activation Guide selector: score every strategy against the
-    current composite + RSI + VIX state and return the highest summed score.
+    Select the best strategy for the current condition stack.
+
+    The router first looks for an exact Composite + RSI + VIX winner. If that
+    stack has no filtered candidate, it backs off through less-specific tiers
+    before using the global fallback. This avoids broad marginal winners
+    swamping the actual state-specific evidence.
     """
-    combo_scores = routing_table.get('combo_scores', {})
     combos_meta = routing_table.get('combos_meta', {})
     default = routing_table.get('default', {})
+    condition_routing = routing_table.get('condition_routing', {})
 
-    conditions: List[str] = []
-    if _is_live_bucket(composite):
-        conditions.append(str(composite))
-    if _is_live_bucket(rsi):
-        conditions.append(str(rsi))
-    if _is_live_bucket(vix):
-        conditions.append(str(vix))
+    state = {
+        'composite_regime': composite,
+        'rsi_regime': rsi,
+        'vix_regime': vix,
+    }
+    conditions = [
+        _condition_label_from_values(state, (d,))
+        for d in ('composite_regime', 'rsi_regime', 'vix_regime')
+        if _is_live_bucket(state.get(d))
+    ]
 
+    for dims in _ROUTING_TIERS:
+        if not all(_is_live_bucket(state.get(d)) for d in dims):
+            continue
+        tier = _tier_id(dims)
+        key = _condition_key_from_values(state, dims)
+        candidate = condition_routing.get(tier, {}).get(key)
+        if not candidate:
+            continue
+        combo = candidate.get('combo')
+        if combo in combos_meta:
+            return combos_meta[combo], float(candidate.get('score', 0.0)), conditions, _tier_label(dims)
+
+    # Backward compatibility for older routing tables that only have marginal scores.
+    combo_scores = routing_table.get('combo_scores', {})
     best_name = default.get('combo')
     best_score = 0.0
+    raw_conditions = [str(v) for v in (composite, rsi, vix) if _is_live_bucket(v)]
     for combo, bucket_scores in combo_scores.items():
-        score = float(sum(bucket_scores.get(c, 0.0) for c in conditions))
+        score = float(sum(bucket_scores.get(c, 0.0) for c in raw_conditions))
         if score > best_score:
             best_score = score
             best_name = combo
 
     if best_name and best_name in combos_meta:
-        return combos_meta[best_name], best_score, conditions
+        return combos_meta[best_name], best_score, conditions, 'Marginal score fallback'
     if best_name == default.get('combo') and default:
-        return default, best_score, conditions
-    return {}, best_score, conditions
+        return default, best_score, conditions, 'Global fallback'
+    return {}, best_score, conditions, 'Unrouted'
+
+
+def _add_condition_candidates(
+    condition_scores: Dict[str, Dict[str, List[Dict]]],
+    df_oos: pd.DataFrame,
+    combo: str,
+    info: Dict,
+) -> None:
+    """Score a strategy on exact and partial condition stacks."""
+    from regime_analyzer import _compute_conditional_metrics
+
+    for dims in _ROUTING_TIERS:
+        if not all(d in df_oos.columns for d in dims):
+            continue
+        labels = df_oos[list(dims)].astype(str).agg('|'.join, axis=1)
+        cond = _compute_conditional_metrics(df_oos['_ret'], labels)
+        tier = _tier_id(dims)
+        for key, m in cond.items():
+            if m.get('insufficient_data') or not _key_has_only_live_buckets(key):
+                continue
+            n = m.get('n_bars', 0)
+            ann_ret = m.get('ann_return_pct') or 0.0
+            max_dd = m.get('max_drawdown_pct') or 0.0
+            s = _score(ann_ret, max_dd, n)
+            if s <= 0:
+                continue
+            condition_scores.setdefault(tier, {}).setdefault(key, []).append({
+                'combo': combo,
+                'strategy': info['strategy'],
+                'exit': info['exit'],
+                'timeframe': info['timeframe'],
+                'params': info['params'],
+                'oos_calmar_all': info['oos_calmar'],
+                'score': s,
+                'ann_return_pct': round(ann_ret, 2),
+                'max_dd_pct': round(max_dd, 2),
+                'n_bars': n,
+            })
 
 
 def _decision_change_reason(prev_row: pd.Series, cur_row: pd.Series) -> str:
@@ -246,7 +346,7 @@ def _build_routing_decisions(
 
     rows: List[Dict] = []
     for _, row in decisions.iterrows():
-        combo_info, score, conditions = _select_combo_for_state(
+        combo_info, score, conditions, tier = _select_combo_for_state(
             row.get('composite_regime'),
             row.get('rsi_regime'),
             row.get('vix_regime'),
@@ -256,6 +356,7 @@ def _build_routing_decisions(
             'strategy_combo': combo_info.get('combo', combo_info.get('strategy', 'unknown')),
             'routing_score': score,
             'routing_conditions': ' + '.join(conditions),
+            'routing_tier': tier,
         })
 
     selected = pd.DataFrame(rows, index=index)
@@ -369,13 +470,12 @@ def build_routing_table(
         logger.warning("No JOINT combinations found with timeframe '%s'.", timeframe_filter)
         return {}
 
-    # ── Score every combo across composite, RSI, and VIX regime analyses ────────
-    # combo_scores: {combo → {bucket → score}} — unified across all three analyses.
-    # A strategy accumulates score in every regime bucket it passes filters in,
-    # regardless of which analysis (composite/RSI/VIX) produced that bucket.
-    # At runtime, the strategy with the highest SUM across all current conditions wins.
+    # ── Score every combo across marginal and exact condition-stack analyses ────
+    # combo_scores keeps the legacy marginal bucket diagnostics. condition_scores
+    # is the runtime map: exact Composite+RSI+VIX winners first, then partial tiers.
     all_scores:   Dict[str, List] = {}              # composite only (for logging/fallback)
     combo_scores: Dict[str, Dict[str, float]] = {}  # unified cross-analysis scores
+    condition_scores: Dict[str, Dict[str, List[Dict]]] = {}
 
     for combo, info in combos.items():
         is_cv, oos_cv = info['is_cv'], info['oos_cv']
@@ -399,6 +499,8 @@ def build_routing_table(
         cond_vix: Dict = {}
         if 'vix_regime' in df_oos.columns and (df_oos['vix_regime'] != 'unavailable').any():
             cond_vix = _compute_conditional_metrics(df_oos['_ret'], df_oos['vix_regime'])
+
+        _add_condition_candidates(condition_scores, df_oos, combo, info)
 
         _bucket_scores: Dict[str, float] = {}
 
@@ -450,6 +552,15 @@ def build_routing_table(
         if _bucket_scores:
             combo_scores[combo] = _bucket_scores
 
+    condition_routing: Dict[str, Dict[str, Dict]] = {}
+    for tier, key_map in condition_scores.items():
+        condition_routing[tier] = {}
+        for key, candidates in key_map.items():
+            ranked = sorted(candidates, key=lambda x: x['score'], reverse=True)
+            key_map[key] = ranked
+            if ranked and ranked[0]['score'] > 0:
+                condition_routing[tier][key] = ranked[0]
+
     # Per-composite-bucket rankings (for logging and simple fallback)
     routing: Dict[str, Dict] = {}
     for regime, candidates in all_scores.items():
@@ -482,10 +593,13 @@ def build_routing_table(
 
     return {
         'routing':     routing,      # per-composite-bucket best (for logging/fallback)
-        'combo_scores': combo_scores, # unified {combo: {bucket: score}} — primary selector
+        'combo_scores': combo_scores, # unified {combo: {bucket: score}} — marginal diagnostics
+        'condition_scores': condition_scores,
+        'condition_routing': condition_routing,
         'combos_meta': combos_meta,   # combo → strategy/exit/params for execution
         'default':     default,
         'all_scores':  all_scores,
+        'timeframe_filter': timeframe_filter,
     }
 
 
@@ -524,11 +638,11 @@ def run_regime_switching_backtest(
     initial_capital: float = 100_000.0,
 ) -> Tuple[pd.DataFrame, Dict]:
     """
-    Evaluates the same composite + RSI + VIX selector shown in the Activation
-    Guide at every OOS timestamp, then switches only when the selected strategy
-    changes.
+    Evaluates the Composite + RSI + VIX condition-stack selector at every OOS
+    timestamp, then switches only when the selected strategy changes.
 
-    Falls back to the global default if no current-state score is available.
+    Falls back through less-specific condition tiers before using the global
+    default if no current-state score is available.
 
     The segment equity curves are chained multiplicatively: each segment
     starts at the capital left by the previous one.
@@ -602,6 +716,7 @@ def run_regime_switching_backtest(
         seg['routing_vix'] = seg_meta['start_state'].get('vix_regime', 'unavailable')
         seg['routing_conditions'] = seg_meta['start_state'].get('routing_conditions', '')
         seg['routing_score'] = seg_meta['start_state'].get('routing_score', 0.0)
+        seg['routing_tier'] = seg_meta['start_state'].get('routing_tier', '')
 
         # If the routed slice begins with an already-open position, the visible
         # entry happened before this regime segment. Flag that carry-in exposure
@@ -717,7 +832,10 @@ def analyze(
     rt_json = {
         'routing': {k: {kk: vv for kk, vv in v.items() if kk not in ('is_cv', 'oos_cv')}
                     for k, v in rt['routing'].items()},
+        'condition_routing': rt.get('condition_routing', {}),
+        'combo_scores': rt.get('combo_scores', {}),
         'default': rt['default'],
+        'timeframe_filter': rt.get('timeframe_filter'),
     }
     rt_path = os.path.join(run_dir, 'regime_routing_table.json')
     with open(rt_path, 'w') as f:

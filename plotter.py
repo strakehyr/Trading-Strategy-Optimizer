@@ -1382,11 +1382,10 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
     all_buckets = sorted(all_buckets)
 
     # -----------------------------------------------------------------------
-    # Unified multi-dimensional scoring across composite, RSI, and VIX analyses.
-    # _COMBO_SCORES: {combo → {regime_bucket → score}} covering all three analyses.
-    # A strategy earns a score in every bucket it passes filters in, regardless
-    # of which analysis produced that bucket.  At runtime, the strategy with the
-    # highest SUM across all current conditions (composite + RSI + VIX) is selected.
+    # Marginal and condition-stack scoring across composite, RSI, and VIX analyses.
+    # _COMBO_SCORES preserves marginal bucket diagnostics for heatmap colouring.
+    # _STACK_ROUTING mirrors the runtime router: exact condition stacks first,
+    # then progressively less-specific tiers before the global fallback.
     # Used to: (a) number-badge selected combos in heatmap labels,
     #          (b) color strategy names in the Activation Guide table,
     #          (c) render the unified SCORES routing block at the bottom.
@@ -1410,6 +1409,7 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
         return ann * (1.0 + 0.10 * (n / 252.0))
 
     _COMBO_SCORES: Dict[str, Dict[str, float]] = {}
+    _STACK_SCORES: Dict[str, Dict[str, Dict[str, float]]] = {}
     for _c in combos:
         _oos = by_combo[_c].get('OOS', {})
         _bucket_scores: Dict[str, float] = {}
@@ -1428,6 +1428,33 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
         if _bucket_scores:
             _COMBO_SCORES[_c] = _bucket_scores
 
+        for _tier, _metrics in _oos.get('condition_stack_metrics', {}).items():
+            for _key, _info in _metrics.items():
+                if any(part in ('unknown', 'unavailable', '') for part in str(_key).split('|')):
+                    continue
+                s = _regime_score(_info)
+                if s > 0:
+                    _STACK_SCORES.setdefault(_tier, {}).setdefault(_key, {})[_c] = s
+
+    _TIER_DIMS = {
+        'composite+rsi+vix': ('composite', 'rsi', 'vix'),
+        'composite+rsi': ('composite', 'rsi'),
+        'composite+vix': ('composite', 'vix'),
+        'rsi+vix': ('rsi', 'vix'),
+        'composite': ('composite',),
+        'rsi': ('rsi',),
+        'vix': ('vix',),
+    }
+    _TIER_ORDER = [
+        'composite+rsi+vix',
+        'composite+rsi',
+        'composite+vix',
+        'rsi+vix',
+        'composite',
+        'rsi',
+        'vix',
+    ]
+
     # Default fallback: best overall OOS Calmar
     _default_ifelse_combo = (
         max(
@@ -1436,10 +1463,17 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
         ) if combos else None
     )
 
-    # Order combos by total score descending; default appended if not already present
+    _stack_combo_totals: Dict[str, float] = {}
+    for _tier_map in _STACK_SCORES.values():
+        for _score_map in _tier_map.values():
+            for _combo, _score in _score_map.items():
+                _stack_combo_totals[_combo] = _stack_combo_totals.get(_combo, 0.0) + _score
+
+    # Order combos by stack score first, then marginal score; default appended if needed.
+    _all_scored_combos = set(_COMBO_SCORES) | set(_stack_combo_totals)
     _selected_order = sorted(
-        _COMBO_SCORES.keys(),
-        key=lambda c: sum(_COMBO_SCORES[c].values()),
+        _all_scored_combos,
+        key=lambda c: (_stack_combo_totals.get(c, 0.0), sum(_COMBO_SCORES.get(c, {}).values())),
         reverse=True,
     )
     if _default_ifelse_combo and _default_ifelse_combo not in _selected_order:
@@ -2145,13 +2179,12 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
     """
 
     # -----------------------------------------------------------------------
-    # Build unified SCORES routing section (inserted at end of report).
-    # Shows the pre-computed score table across composite, RSI, and VIX analyses
-    # plus the select_strategy() function that sums scores across current conditions.
-    # This mirrors exactly what regime_router.run_regime_switching_backtest() applies at runtime.
+    # Build the routing section inserted at the end of the report. The generated
+    # select_strategy() uses the same exact-stack-first fallback hierarchy as
+    # regime_router.run_regime_switching_backtest().
     # -----------------------------------------------------------------------
     def _build_ifelse_html() -> str:
-        if not _COMBO_SCORES:
+        if not (_COMBO_SCORES or _STACK_SCORES):
             return ''
 
         # Syntax-highlight helpers
@@ -2172,19 +2205,35 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
         live_buckets: set = set()
         for _bs in _COMBO_SCORES.values():
             live_buckets.update(_bs.keys())
+        for _tier_map in _STACK_SCORES.values():
+            for _key in _tier_map:
+                live_buckets.update(str(_key).split('|'))
 
         active_comp = [b for b in COMPOSITE_BUCKETS if b in live_buckets] or COMPOSITE_BUCKETS
         active_rsi  = [b for b in RSI_BUCKETS       if b in live_buckets] or RSI_BUCKETS
         active_vix  = [b for b in VIX_BUCKETS       if b in live_buckets]
         has_vix     = bool(active_vix)
 
-        def _win(conditions: list) -> str:
+        def _stack_win(comp: str = None, rsi: str = None, vix: str = None) -> tuple:
+            state = {'composite': comp, 'rsi': rsi, 'vix': vix}
+            for tier in _TIER_ORDER:
+                dims = _TIER_DIMS[tier]
+                if not all(state.get(d) for d in dims):
+                    continue
+                key = '|'.join(state[d] for d in dims)
+                score_map = _STACK_SCORES.get(tier, {}).get(key, {})
+                if score_map:
+                    combo = max(score_map, key=score_map.get)
+                    return combo, score_map[combo], tier
+
+            # Backward-compatible fallback for older reports without stack metrics.
+            conditions = [v for v in (comp, rsi, vix) if v]
             best, best_s = _default_ifelse_combo, 0.0
             for combo, bscores in _COMBO_SCORES.items():
                 s = sum(bscores.get(c, 0.0) for c in conditions)
                 if s > best_s:
                     best_s, best = s, combo
-            return best or _default_ifelse_combo
+            return best or _default_ifelse_combo, best_s, 'marginal'
 
         def _ret_tag(combo: str, score: float = 0.0) -> str:
             col   = ifelse_combo_color.get(combo, TEXT)
@@ -2205,10 +2254,11 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
         code_lines: List[str] = []
 
         # ── Header ────────────────────────────────────────────────────────────
-        code_lines.append(_cm('# Auto-Generated Strategy Routing — if-else decision tree'))
+        code_lines.append(_cm('# Auto-Generated Strategy Routing — exact-stack decision tree'))
         code_lines.append(_cm('# Inputs : composite (RV×SMA200)  ·  rsi (3-bar consensus)  ·  vix (252-day pct rank)'))
         code_lines.append(_cm('# Filters: max_dd &gt; −8%  ·  |max_dd| ≤ ann_return / 2  ·  n ≥ 63 bars'))
         code_lines.append(_cm('# Score  : ann_return × (1 + 0.10 × years_in_regime)'))
+        code_lines.append(_cm('# Order  : exact Composite+RSI+VIX, then partial condition tiers, then default fallback'))
         code_lines.append('')
 
         # ── Function signature ────────────────────────────────────────────────
@@ -2230,25 +2280,21 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
                     code_lines.append(f'        {_kr("elif")} rsi == {_st(f"&quot;{rsi}&quot;")}:')
 
                 if has_vix:
-                    vix_wins  = {v: _win([comp, rsi, v]) for v in active_vix}
-                    novix_win = _win([comp, rsi])
+                    vix_wins  = {v: _stack_win(comp, rsi, v) for v in active_vix}
+                    novix_win = _stack_win(comp, rsi, None)
                     # Collapse if every VIX condition and no-VIX all resolve to the same strategy
-                    if len(set(vix_wins.values()) | {novix_win}) == 1:
-                        score = sum(_COMBO_SCORES.get(novix_win, {}).get(c, 0) for c in [comp, rsi])
-                        code_lines.append(f'            {_ret_tag(novix_win, score)}')
+                    if len({w[0] for w in vix_wins.values()} | {novix_win[0]}) == 1:
+                        code_lines.append(f'            {_ret_tag(novix_win[0], novix_win[1])}')
                     else:
                         for vi, vix in enumerate(active_vix):
                             kw3 = _kr('if') if vi == 0 else _kr('elif')
-                            w   = vix_wins[vix]
-                            s   = sum(_COMBO_SCORES.get(w, {}).get(c, 0) for c in [comp, rsi, vix])
+                            w, s, _tier = vix_wins[vix]
                             code_lines.append(f'            {kw3} vix == {_st(f"&quot;{vix}&quot;")}:')
                             code_lines.append(f'                {_ret_tag(w, s)}')
                         code_lines.append(f'            {_kr("else")}:  {_cm("# VIX unavailable")}')
-                        s_nv = sum(_COMBO_SCORES.get(novix_win, {}).get(c, 0) for c in [comp, rsi])
-                        code_lines.append(f'                {_ret_tag(novix_win, s_nv)}')
+                        code_lines.append(f'                {_ret_tag(novix_win[0], novix_win[1])}')
                 else:
-                    w = _win([comp, rsi])
-                    s = sum(_COMBO_SCORES.get(w, {}).get(c, 0) for c in [comp, rsi])
+                    w, s, _tier = _stack_win(comp, rsi, None)
                     code_lines.append(f'            {_ret_tag(w, s)}')
 
         # ── Default fallback ──────────────────────────────────────────────────
@@ -2272,9 +2318,9 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
         for _c in _selected_order:
             _col  = ifelse_combo_color.get(_c, TEXT)
             _num  = ifelse_combo_number.get(_c, '')
-            _tot  = sum(_COMBO_SCORES.get(_c, {}).values())
+            _tot = _stack_combo_totals.get(_c, sum(_COMBO_SCORES.get(_c, {}).values()))
             _note = (f' <span style="color:{MUTED};font-size:10px">[Σ {_tot:.1f}]</span>'
-                     if _c in _COMBO_SCORES else
+                     if _c in _stack_combo_totals or _c in _COMBO_SCORES else
                      f' <span style="color:{MUTED}">(DEFAULT)</span>')
             legend_items_html += (
                 f'<span style="display:inline-flex;align-items:center;margin:4px 12px 4px 0;">'
@@ -2293,8 +2339,8 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
       Auto-Generated Strategy Routing
     </h2>
     <p style="color:{MUTED};font-size:12px;margin:0 0 18px;line-height:1.6">
-      Decision tree built from <strong>all three regime analyses</strong> (composite RV×SMA200, RSI, VIX).
-      For every combination of market conditions the strategy with the highest combined OOS score is selected.
+      Decision tree built from <strong>condition-stack regime analysis</strong> (composite RV×SMA200, RSI, VIX).
+      The router checks exact Composite + RSI + VIX winners first, then less-specific tiers before fallback.
       Identical branches across conditions are collapsed automatically.<br>
       <code style="background:#efe7da;border:1px solid {BORDER};padding:2px 8px;border-radius:4px;display:inline-block;margin:4px 0;color:{TEXT}">
         max_dd &gt; −8% &nbsp;·&nbsp; |max_dd| ≤ ann_return / 2 &nbsp;·&nbsp; n_bars ≥ 63 (~3 months)
@@ -2307,7 +2353,7 @@ def create_regime_strategy_passport(passport_entries: List[Dict], save_path: str
                 border-radius:6px;border:1px solid {BORDER};">
       <span style="color:{MUTED};font-size:11px;text-transform:uppercase;
                    letter-spacing:0.08em;display:block;margin-bottom:8px">
-        Strategy Legend — ranked by total score (Σ across all regime buckets)
+        Strategy Legend — ranked by condition-stack score
       </span>
       <div style="display:flex;flex-wrap:wrap;">{legend_items_html}</div>
     </div>
@@ -3108,8 +3154,8 @@ def create_auto_generated_strategy_routing_report(
 </table>
 {unassigned_note}
 <p style="color:#667085;font-size:11px;margin:8px 0 28px;font-family:sans-serif">
-  ⓘ This table shows the composite-only fallback routing. At runtime, the full decision
-  tree (composite × RSI × VIX) from the Attribution report is used to select the strategy.
+  ⓘ This table is the composite-only fallback map. Runtime selection uses the
+  condition-stack table above first, then falls back through marginal tiers only when needed.
 </p>"""
 
     # --- 2. Equity curve plots per symbol --------------------------------
@@ -3134,12 +3180,33 @@ def create_auto_generated_strategy_routing_report(
         _combo_color_map[_dflt_combo] = _SIGNAL_PALETTE[len(_sorted_combos) % len(_SIGNAL_PALETTE)]
 
     def _short_label(combo: str) -> str:
-        """Compact readable label: strip common suffixes/prefixes."""
-        for suffix in ('_fixed_tp_sl_1day', '_no_exit_1day', '_1day'):
-            if combo.endswith(suffix):
-                combo = combo[:-len(suffix)]
+        """Compact readable label that keeps exit and timeframe visible."""
+        raw = str(combo)
+        timeframe = ''
+        for suffix, label in (
+            ('_1day', '1d'),
+            ('_4hours', '4h'),
+            ('_1hour', '1h'),
+        ):
+            if raw.endswith(suffix):
+                raw = raw[:-len(suffix)]
+                timeframe = label
                 break
-        return combo.replace('_', ' ')
+        exit_label = ''
+        for suffix, label in (
+            ('_fixed_tp_sl', 'fixed TP/SL'),
+            ('_no_exit', 'no exit'),
+        ):
+            if raw.endswith(suffix):
+                raw = raw[:-len(suffix)]
+                exit_label = label
+                break
+        parts = [raw.replace('_', ' ')]
+        if exit_label:
+            parts.append(exit_label)
+        if timeframe:
+            parts.append(timeframe)
+        return ' · '.join(parts)
 
     def _window_series(series: Optional[pd.Series], index: pd.Index) -> pd.Series:
         if series is None or series.empty or len(index) == 0:
@@ -3357,19 +3424,26 @@ def create_auto_generated_strategy_routing_report(
                         if 'routing_conditions' in _rsx.columns
                         else pd.Series('', index=_rsx.index)
                     )
+                    _rsx_tier = (
+                        _rsx['routing_tier']
+                        if 'routing_tier' in _rsx.columns
+                        else pd.Series('', index=_rsx.index)
+                    )
                     _hover = [
                         f'<b>ROUTING BOUNDARY EXIT</b><br>'
                         f'{str(idx)[:10]}<br>'
                         f'Closed adopted strategy: {c}<br>'
                         f'Trigger: {reason}<br>'
+                        f'Selection tier: {tier}<br>'
                         f'Conditions: {conditions}<br>'
                         f'Portfolio: ${v:,.0f}'
                         f'<extra></extra>'
-                        for idx, v, c, reason, conditions in zip(
+                        for idx, v, c, reason, tier, conditions in zip(
                             _rsx.index,
                             _rsx['total_value'],
                             _rsx_combo,
                             _rsx_reason,
+                            _rsx_tier,
                             _rsx_conditions,
                         )
                     ]
@@ -3381,9 +3455,10 @@ def create_auto_generated_strategy_routing_report(
                         legendgroup='regime_switch_exit',
                         showlegend=True,
                         marker=dict(
-                            symbol='diamond-open', size=12,
+                            symbol='diamond-open', size=8,
                             color='#b1762d',
-                            line=dict(color='#b1762d', width=2),
+                            opacity=0.58,
+                            line=dict(color='#b1762d', width=1.6),
                         ),
                         hovertemplate=_hover,
                     ), row=1, col=1)
@@ -3560,7 +3635,7 @@ def create_auto_generated_strategy_routing_report(
               font-size:13px;margin-bottom:10px;background:#fffdf8;border:1px solid #d8cfbf;border-radius:8px;overflow:hidden;">
   <thead><tr style="background:#f1eadf;">
     <th style="{_th}text-align:left;">RSI Regime</th>
-    <th style="{_th}text-align:left;">Best Strategy for this RSI Zone</th>
+    <th style="{_th}text-align:left;">Marginal Winner for this RSI Zone</th>
     <th style="{_th}text-align:right;">Score</th>
   </tr></thead>
   <tbody>{rsi_rows}</tbody>
@@ -3571,10 +3646,72 @@ def create_auto_generated_strategy_routing_report(
               font-size:13px;margin-bottom:30px;background:#fffdf8;border:1px solid #d8cfbf;border-radius:8px;overflow:hidden;">
   <thead><tr style="background:#f1eadf;">
     <th style="{_th}text-align:left;">VIX Regime</th>
-    <th style="{_th}text-align:left;">Best Strategy for this VIX Zone</th>
+    <th style="{_th}text-align:left;">Marginal Winner for this VIX Zone</th>
     <th style="{_th}text-align:right;">Score</th>
   </tr></thead>
   <tbody>{vix_rows}</tbody>
+</table>"""
+
+    condition_routing = routing_table.get('condition_routing', {})
+    _TIER_ORDER = [
+        ('composite+rsi+vix', 'Composite + RSI + VIX'),
+        ('composite+rsi', 'Composite + RSI'),
+        ('composite+vix', 'Composite + VIX'),
+        ('rsi+vix', 'RSI + VIX'),
+        ('composite', 'Composite'),
+        ('rsi', 'RSI'),
+        ('vix', 'VIX'),
+    ]
+    _KEY_LABELS = {
+        'low_vol_above': 'Low Vol · Above SMA200',
+        'low_vol_below': 'Low Vol · Below SMA200',
+        'med_vol_above': 'Med Vol · Above SMA200',
+        'med_vol_below': 'Med Vol · Below SMA200',
+        'high_vol_above': 'High Vol · Above SMA200',
+        'high_vol_below': 'High Vol · Below SMA200',
+        'rsi_bull': 'RSI Bull',
+        'rsi_bear': 'RSI Bear',
+        'vix_very_low': 'VIX Very Low',
+        'vix_low': 'VIX Low',
+        'vix_elevated': 'VIX Elevated',
+        'vix_high': 'VIX High',
+    }
+
+    def _stack_key_label(key: str) -> str:
+        return ' + '.join(_KEY_LABELS.get(part, part) for part in str(key).split('|'))
+
+    stack_rows = ''
+    for tier_id, tier_label in _TIER_ORDER:
+        tier_map = condition_routing.get(tier_id, {})
+        for key, candidate in sorted(tier_map.items(), key=lambda kv: kv[0]):
+            combo = candidate.get('combo', dflt_combo)
+            stack_rows += (
+                '<tr style="border-bottom:1px solid #d8cfbf;">'
+                f'<td style="padding:9px 14px;color:#163a5c;font-weight:700;">{tier_label}</td>'
+                f'<td style="padding:9px 14px;color:#172033;">{_stack_key_label(key)}</td>'
+                f'<td style="padding:9px 14px;color:#172033;font-family:monospace;font-size:12px;">{combo}</td>'
+                f'<td style="padding:9px 14px;text-align:right;color:#172033;">{candidate.get("score", 0.0):.2f}</td>'
+                f'<td style="padding:9px 14px;text-align:right;color:#667085;">{candidate.get("n_bars", "—")}</td>'
+                '</tr>\n'
+            )
+    if not stack_rows:
+        stack_rows = (
+            '<tr><td colspan="5" style="padding:14px;color:#667085;">'
+            'No explicit condition-stack winners cleared the filters; runtime will use fallback.'
+            '</td></tr>'
+        )
+
+    condition_stack_table_html = f"""
+<table style="width:100%;border-collapse:collapse;font-family:'Consolas','Fira Code',monospace;
+              font-size:13px;margin-bottom:30px;background:#fffdf8;border:1px solid #d8cfbf;border-radius:8px;overflow:hidden;">
+  <thead><tr style="background:#f1eadf;">
+    <th style="{_th}text-align:left;">Runtime Tier</th>
+    <th style="{_th}text-align:left;">Condition Stack</th>
+    <th style="{_th}text-align:left;">Selected Strategy</th>
+    <th style="{_th}text-align:right;">Score</th>
+    <th style="{_th}text-align:right;">Bars</th>
+  </tr></thead>
+  <tbody>{stack_rows}</tbody>
 </table>"""
 
     # --- 5. Regime timeline (composite + RSI + VIX over OOS period) ------
@@ -3678,14 +3815,14 @@ def create_auto_generated_strategy_routing_report(
       <p>Symbols with completed out-of-sample routing backtests in this report.</p>
     </article>
     <article class="hero-card">
-      <span class="hero-label">Composite Buckets</span>
-      <strong>{len(routing_table.get('routing', {}))}</strong>
-      <p>Composite regimes that received an explicit routed strategy before fallback.</p>
+      <span class="hero-label">Condition Stacks</span>
+      <strong>{sum(len(v) for v in routing_table.get('condition_routing', {}).values())}</strong>
+      <p>Explicit stack winners available before the router needs the global fallback.</p>
     </article>
     <article class="hero-card">
       <span class="hero-label">Runtime Inputs</span>
       <strong>{'Composite + RSI + VIX' if vix_series is not None and not vix_series.empty else 'Composite + RSI'}</strong>
-      <p>The router scores the current dimensions at each bar and switches when the selected strategy changes.</p>
+      <p>The router uses the most specific cleared condition stack, then backs off tier by tier.</p>
     </article>
     <article class="hero-card">
       <span class="hero-label">Fallback Strategy</span>
@@ -3776,8 +3913,8 @@ def create_auto_generated_strategy_routing_report(
     <p class="eyebrow">Editorial Swiss / Product-Grade Interactivity</p>
     <h1>Auto Generated Strategy Routing Backtest</h1>
     <p class="deck">
-    OOS backtest: for each market regime segment the best-scoring strategy is selected
-    using the composite × RSI × VIX multi-dimensional decision tree.<br>
+    OOS backtest: at each OOS bar the router uses the most specific cleared
+    composite × RSI × VIX condition stack, then backs off tier by tier.<br>
     Score&nbsp;=&nbsp;ann_return&nbsp;&times;&nbsp;(1&nbsp;+&nbsp;0.10&nbsp;&times;&nbsp;years_in_regime)
     &nbsp;·&nbsp; Filters: max_dd &gt; −8% &nbsp;·&nbsp; |max_dd| ≤ ann_return / 2
     &nbsp;·&nbsp; n ≥ 63 bars
@@ -3797,11 +3934,11 @@ def create_auto_generated_strategy_routing_report(
     <div class="section-head">
       <div>
         <p class="section-kicker">Decision Surfaces</p>
-        <h2>Composite, RSI, and VIX Routing Tables</h2>
-        <p>The composite table remains the explicit fallback map, while the RSI and VIX tables show the secondary score layers that shape the final runtime choice when those states are present.</p>
+        <h2>Condition-Stack Routing Tables</h2>
+        <p>The first table is the executable runtime map: exact Composite + RSI + VIX winners first, then progressively less-specific tiers. The marginal tables below are diagnostics, not the final selector.</p>
       </div>
       <div class="chip-row">
-        <span class="chip">Score model preserved</span>
+        <span class="chip">Exact stack first</span>
         <span class="chip">Hard filters preserved</span>
         <span class="chip">Fallback preserved</span>
       </div>
@@ -3810,13 +3947,16 @@ def create_auto_generated_strategy_routing_report(
   <h2>Regime Colour Key</h2>
   <div style="margin-bottom:24px;">{legend_items}</div>
 
-  <h2>1 — Composite Routing Table</h2>
+  <h2>1 — Runtime Condition-Stack Routing</h2>
+  {condition_stack_table_html}
+
+  <h2>2 — Composite Fallback Table</h2>
   {routing_table_html}
 
-  <h2>2 — RSI Regime Routing</h2>
+  <h2>3 — RSI Marginal Diagnostic</h2>
   {rsi_table_html}
 
-  <h2>3 — VIX Regime Routing</h2>
+  <h2>4 — VIX Marginal Diagnostic</h2>
   {vix_table_html}
     </div>
   </section>
